@@ -9,9 +9,11 @@
 # ils se saisissent dans le tableau de bord : l'application déployée →
 # Settings → Variables and Secrets.
 
-name = "essor-relais"
+name = "essor"
 main = "relais-cloudflare.js"
 compatibility_date = "2026-08-01"
+workers_dev = true
+preview_urls = false
 
 [vars]
 # L'origine autorisée à appeler le relais (modifiable dans le tableau de bord).
