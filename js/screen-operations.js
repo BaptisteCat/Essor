@@ -22,6 +22,7 @@ const ScreenOperations = {
           <h2 style="margin:0">Comptes</h2>
           <span class="spacer"></span>
           <button id="op-add-account">+ Nouveau compte</button>
+          <button id="op-sync-banques" style="display:none">Synchroniser mes banques</button>
           <button id="op-import" class="primary">Importer des relevés</button>
         </div>
         <div class="drop-hint">Déposez ici votre archive « Relevé de tous comptes » — CSV bancaires,
@@ -63,6 +64,11 @@ const ScreenOperations = {
         <div id="op-list"></div>
       </div>`;
 
+    const bSync = document.getElementById('op-sync-banques');
+    if (Banque.actif() && Object.keys(Banque.cfg().liens || {}).length) {
+      bSync.style.display = '';
+      bSync.onclick = (e) => UI.busy(e.target, () => Banque.synchroniser());
+    }
     ScreenOperations.renderDoublons();
     ScreenOperations.renderAccounts();
     ScreenOperations.renderList();

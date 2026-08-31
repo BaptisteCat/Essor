@@ -348,6 +348,27 @@ const App = {
       UI.toast(`${r.n} cours crypto mis à jour.`);
     };
     Cours.majAuto();
+    // Retour d'une autorisation bancaire : l'URL porte un code à échanger.
+    Banque.onBilan = (b) => {
+      Engine.invalidate();
+      App.render();
+      if (b.erreurs.length) UI.error(`Synchronisation bancaire : ${b.erreurs[0]}.`, 'Les autres comptes ont été traités.');
+      else if (b.ajoutees || b.comptes) UI.toast(`Banques synchronisées : ${b.ajoutees} opération(s) nouvelle(s) sur ${b.comptes} compte(s).`);
+      if (b.expirees.length) UI.toast(`Consentement à renouveler : ${b.expirees.map(U.escapeHtml).join(', ')} (Réglages → Connexion bancaire).`, 'error');
+      if (b.soldes.length && typeof ScreenOperations !== 'undefined') {
+        ScreenOperations.proposerSoldesReleves(b.soldes);
+      }
+    };
+    if (new URLSearchParams(location.search).get('state') === 'essor-eb') {
+      Banque.reprendre().then(session => {
+        if (!session) return;
+        UI.toast(`${U.escapeHtml(session.aspsp)} connectée : ${session.comptes.length} compte(s).
+          Rattachez-les dans Réglages → Connexion bancaire.`);
+        App.go('reglages');
+      }).catch(e => UI.error(`Connexion bancaire : ${e.message}.`, 'Relancez l’autorisation depuis Réglages.'));
+    } else {
+      Banque.majAuto();
+    }
     Install.rendreDurable();
     // L'installabilité peut n'être annoncée qu'après coup : l'écran Réglages
     // doit alors se remettre à jour tout seul.

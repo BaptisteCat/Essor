@@ -100,6 +100,11 @@ const ScreenReglages = {
       </div>
 
       <div class="card">
+        <h2>Connexion bancaire</h2>
+        <div id="rg-banque"></div>
+      </div>
+
+      <div class="card">
         <h2>Synchronisation</h2>
         <div id="rg-sync"></div>
       </div>
@@ -123,6 +128,7 @@ const ScreenReglages = {
     ScreenReglages.renderCredits();
     ScreenReglages.renderGoals();
     ScreenReglages.renderSymbols();
+    ScreenReglages.renderBanque();
     ScreenReglages.renderSync();
     ScreenReglages.renderInstallation();
     ScreenReglages.renderSecurite();
@@ -145,6 +151,120 @@ const ScreenReglages = {
     };
     document.getElementById('rg-add-credit').onclick = () => ScreenReglages.creditModal();
     document.getElementById('rg-add-goal').onclick = () => ScreenReglages.goalModal();
+  },
+
+  /* ---------- Connexion bancaire ---------- */
+
+  async renderBanque() {
+    const holder = document.getElementById('rg-banque');
+    if (!holder) return;
+    const b = Banque.cfg();
+    const actif = Banque.actif();
+
+    const sessions = b.sessions.map(s => {
+      const jours = Banque.joursRestants(s);
+      const etat = jours == null ? '' : jours <= 0
+        ? '<span class="badge cuivre">consentement expiré</span>'
+        : jours <= 15 ? `<span class="badge cuivre">${jours} j restants</span>`
+        : `<span class="badge argent">${jours} j de consentement</span>`;
+      const comptes = s.comptes.map(c => `<tr>
+        <td>${U.escapeHtml((c.uid || '').slice(0, 10))}…
+          ${c.solde ? `<div class="small num">${U.fmtEUR(c.solde.balance)} au ${U.fmtDate(c.solde.date)}</div>` : ''}</td>
+        <td>${UI.accountSelect('lien-' + c.uid, b.liens[c.uid], { allowNone: true })}</td>
+      </tr>`).join('');
+      return `<div class="notice" style="margin-top:8px">
+        <b>${U.escapeHtml(s.aspsp)}</b> ${etat}
+        <button class="ghost" data-renouveler="${U.escapeHtml(s.aspsp)}">Renouveler</button>
+        <button class="ghost" data-oublier="${U.escapeHtml(s.aspsp)}">Oublier</button>
+        <table style="margin-top:6px"><tr><th>Compte bancaire</th><th>Compte Essor</th></tr>${comptes}</table>
+      </div>`;
+    }).join('');
+
+    holder.innerHTML = `
+      <p class="small">Vos banques alimentent Essor directement — mêmes vérifications que les
+      fichiers. ${UI.info(`Les opérations passent de la banque à Enable Banking (prestataire agréé
+      DSP2), puis par votre relais Cloudflare, jusqu'ici. Rien n'est stocké en chemin, et le solde
+      annoncé par la banque est proposé en certification — la preuve au centime, sans geste. Le
+      consentement se renouvelle tous les 90 à 180 jours : c'est la règle DSP2. La marche à suivre
+      complète est dans DEPLOIEMENT.md du dépôt de l'application.`)}</p>
+      <div class="row">
+        <div class="field" style="min-width:230px"><label>Adresse du relais (Cloudflare Worker)</label>
+          <input id="bq-relais" placeholder="https://essor-relais.xxx.workers.dev"
+            value="${U.escapeHtml(b.relais || '')}" autocapitalize="off" spellcheck="false"></div>
+        <div class="field" style="min-width:200px"><label>Clé du relais</label>
+          ${UI.secret('bq-cle', { placeholder: 'la RELAIS_CLE du Worker', autocomplete: 'off' })}</div>
+        <div class="field"><button class="primary" id="bq-config">${actif ? 'Mettre à jour' : 'Connecter'}</button></div>
+      </div>
+      ${actif ? `
+        <div class="row" style="margin-top:8px">
+          <div class="field" style="min-width:220px"><label>Ajouter une banque</label>
+            <select id="bq-banque"><option value="">Chargement…</option></select></div>
+          <div class="field"><button id="bq-autoriser">Autoriser cette banque…</button></div>
+          <div class="field"><button id="bq-sync">Synchroniser maintenant</button></div>
+        </div>
+        <div class="row" style="margin-top:4px">
+          <div class="field"><label>
+            <input type="checkbox" id="bq-auto" style="width:auto" ${b.auto === false ? '' : 'checked'}>
+            Synchronisation automatique à l'ouverture</label></div>
+          <div class="hint">Dernière synchronisation : ${U.escapeHtml(Banque.derniereMaj())}.</div>
+        </div>
+        ${sessions || '<div class="empty">Aucune banque autorisée pour l\\u2019instant.</div>'}
+      ` : ''}`;
+
+    const champCle = document.getElementById('bq-cle');
+    if (champCle) champCle.value = b.cle || '';
+
+    document.getElementById('bq-config').onclick = (e) => UI.busy(e.target, async () => {
+      b.relais = document.getElementById('bq-relais').value.trim();
+      b.cle = document.getElementById('bq-cle').value.trim();
+      if (!b.relais || !b.cle) { UI.error('Adresse ou clé du relais manquante.', 'Les deux se trouvent dans votre Worker Cloudflare.'); return; }
+      try { await Banque.appel('/aspsps?country=FR'); }
+      catch (ex) { UI.error(`Le relais ne répond pas : ${ex.message}.`, 'Vérifiez l\\u2019adresse, la clé, et que le Worker est déployé.'); return; }
+      Store.markDirty();
+      UI.toast('Relais connecté. Autorisez maintenant votre première banque.');
+      ScreenReglages.renderBanque();
+    });
+
+    if (!actif) return;
+
+    // La liste des banques se charge en arrière-plan.
+    Banque.banques().then(liste => {
+      const sel = document.getElementById('bq-banque');
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— choisir —</option>' +
+        liste.map(x => `<option value="${U.escapeHtml(x.name)}">${U.escapeHtml(x.name)}</option>`).join('');
+    }).catch(() => {});
+
+    document.getElementById('bq-autoriser').onclick = (e) => UI.busy(e.target, async () => {
+      const nom = document.getElementById('bq-banque').value;
+      if (!nom) { UI.error('Choisissez une banque.', 'La liste couvre les établissements français.'); return; }
+      await Banque.autoriser(nom);   // la page part chez la banque
+    });
+    document.getElementById('bq-sync').onclick = (e) => UI.busy(e.target, async () => {
+      await Banque.synchroniser();
+      ScreenReglages.renderBanque();
+    });
+    document.getElementById('bq-auto').onchange = (e) => {
+      b.auto = e.target.checked;
+      Store.markDirty();
+    };
+    holder.querySelectorAll('[data-renouveler]').forEach(x => x.onclick = (e) =>
+      UI.busy(e.target, () => Banque.autoriser(x.dataset.renouveler)));
+    holder.querySelectorAll('[data-oublier]').forEach(x => x.onclick = () => UI.confirm(
+      'Oublier cette banque ?',
+      'Le consentement local est effacé — les opérations déjà importées restent. Pour révoquer côté banque, passez par son espace client.',
+      () => {
+        b.sessions = b.sessions.filter(s => s.aspsp !== x.dataset.oublier);
+        Store.markDirty();
+        ScreenReglages.renderBanque();
+      }));
+    // Rattachement compte bancaire → compte Essor, enregistré au changement.
+    holder.querySelectorAll('[id^="lien-"]').forEach(sel => sel.onchange = () => {
+      const uid = sel.id.slice(5);
+      if (sel.value) b.liens[uid] = sel.value; else delete b.liens[uid];
+      Store.markDirty();
+      UI.toast(sel.value ? 'Compte rattaché : il sera synchronisé.' : 'Compte détaché.');
+    });
   },
 
   /* ---------- Synchronisation entre appareils ---------- */

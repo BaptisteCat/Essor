@@ -50,6 +50,7 @@ const waitSuite = setInterval(() => {
 <script src="js/engine.js"></script>
 <script src="js/indices.js"></script>
 <script src="js/cours.js"></script>
+<script src="js/banque.js"></script>
 <script src="js/importers.js"></script>
 <script src="js/rules.js"></script>
 <script src="js/alloc.js"></script>
@@ -691,6 +692,72 @@ try {
       initial === 'password' && montre === 'text' && champ.type === 'password',
       `${initial} → ${montre} → ${champ.type}`);
     bac.remove();
+  }
+
+  /* ---- Connexion bancaire : le relais nourrit le pipeline des fichiers ---- */
+  {
+    const S = fresh();
+    S.accounts.push({ id: 'cc', name: 'BRED', type: 'courant', order: 0 });
+    const vraiFetch = window.fetch;
+    let appels = 0;
+    window.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      appels++;
+      const rep = (o) => ({ ok: true, status: 200, text: async () => JSON.stringify(o) });
+      if ((opts.headers || {})['X-Essor-Cle'] !== 'cle-test') {
+        return { ok: false, status: 401, text: async () => '{"erreur":"cle"}' };
+      }
+      if (u.includes('/balances')) return rep({ balances: [{ balance_type: 'CLBD',
+        balance_amount: { amount: '1500.00' }, reference_date: '2026-08-31' }] });
+      if (u.includes('/transactions')) return rep({ transactions: [
+        { booking_date: '2026-08-28', transaction_amount: { amount: '1167.36' }, credit_debit_indicator: 'CRDT',
+          debtor: { name: 'SYLVIE NOACHOVITCH ASSOCIE' }, remittance_information: ['GRATIFICATION STAGE'], status: 'BOOK' },
+        { booking_date: '2026-08-29', transaction_amount: { amount: '40.21' }, credit_debit_indicator: 'DBIT',
+          creditor: { name: 'CAPS ME' }, status: 'BOOK' },
+        { booking_date: '2026-08-30', transaction_amount: { amount: '99.99' }, credit_debit_indicator: 'DBIT',
+          creditor: { name: 'EN ATTENTE' }, status: 'PDNG' },
+      ] });
+      return { ok: false, status: 403, text: async () => '{"erreur":"chemin"}' };
+    };
+
+    const b = Banque.cfg();
+    b.relais = 'https://relais.test.workers.dev'; b.cle = 'cle-test';
+    b.sessions = [{ id: 's1', aspsp: 'BRED', validUntil: new Date(Date.now() + 90 * 86400000).toISOString(),
+      comptes: [{ uid: 'u1' }] }];
+    b.liens.u1 = 'cc';
+
+    const bilan = await Banque.synchroniser({ silencieux: true });
+    check('Banque — les opérations comptabilisées entrent, le pré-comptabilisé attend',
+      bilan.ajoutees === 2 && S.transactions.length === 2 &&
+      !S.transactions.some(t => /EN ATTENTE/.test(t.label)),
+      `ajoutées ${bilan.ajoutees}`);
+    check('Banque — sens et libellé : crédit positif avec tiers et motif, débit négatif',
+      S.transactions.some(t => t.amount === 116736 && /NOACHOVITCH.*GRATIFICATION/.test(t.label)) &&
+      S.transactions.some(t => t.amount === -4021 && t.label === 'CAPS ME'));
+    check('Banque — le solde annoncé devient une proposition de certification',
+      bilan.soldes.length === 1 && bilan.soldes[0].balance === 150000 && bilan.soldes[0].date === '2026-08-31');
+
+    const rebilan = await Banque.synchroniser({ silencieux: true });
+    check('Banque — resynchroniser n’ajoute rien : même pipeline, même dédoublonnage',
+      rebilan.ajoutees === 0 && rebilan.doublons === 2 && S.transactions.length === 2);
+
+    // Le même salaire arrivant ensuite par le CSV : écarté par apparentement.
+    const csv = 'Date;Type;Montant;Commentaire;Détail 1;Détail 2' + String.fromCharCode(10) +
+      '28/08/2026;VIREMENT SEPA RECU;1167,36;;SYLVIE NOACHOVITCH   ASSOCIE;GRATIFICATION STAGE' + String.fromCharCode(10);
+    const ses = await Importer.analyze([{ name: 'bred.csv', bytes: new TextEncoder().encode(csv) }]);
+    const r = Importer.apply(ses, { [ses.files[0].path]: 'cc' });
+    check('Banque — connexion et fichiers se croisent sans doubler le salaire',
+      r.added === 0 && r.dup === 1 &&
+      S.transactions.filter(t => /NOACHOVITCH/.test(t.label)).length === 1);
+
+    // Consentement expiré : rien n’est tenté, l’expiration est nommée.
+    b.sessions[0].validUntil = new Date(Date.now() - 86400000).toISOString();
+    const expire = await Banque.synchroniser({ silencieux: true });
+    check('Banque — un consentement expiré est signalé, jamais forcé',
+      expire.comptes === 0 && expire.expirees.join() === 'BRED');
+
+    window.fetch = vraiFetch;
+    delete S.settings.banque;
   }
 
   /* ---- Fenêtre de l'historique mensuel ---- */

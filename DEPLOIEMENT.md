@@ -149,7 +149,46 @@ l'appareil n'a pas de vérification biométrique configurée.
 Et dans tous les cas, le petit œil au bout de chaque champ affiche ce que vous
 tapez — phrase de passe comme jeton d'accès.
 
-## 8. Publier une mise à jour
+## 8. Connexion bancaire directe (facultative)
+
+Essor peut interroger vos banques directement — comme Bankin' ou Finary — via
+**Enable Banking**, prestataire agréé DSP2 dont l'offre « Restricted
+Production » est gratuite pour vos propres comptes. Les opérations récupérées
+passent par le même pipeline que les fichiers (dédoublonnage compris), et le
+solde annoncé par la banque est proposé en certification.
+
+Ce que ça change à la confidentialité, dit clairement : vos opérations
+transitent par Enable Banking puis par un petit relais Cloudflare **à vous** —
+rien n'y est stocké, mais elles ne restent plus confinées à votre machine.
+Le consentement DSP2 se renouvelle auprès de chaque banque tous les 90 à
+180 jours.
+
+Mise en place (~30 minutes, une fois) :
+
+1. **Enable Banking** — créez un compte sur enablebanking.com, puis dans le
+   Control Panel créez une *application* :
+   - environnement : **Production** (l'accès restreint à vos comptes est la
+     valeur par défaut d'un nouveau compte) ;
+   - **redirect URL** : `https://VOTRE-COMPTE.github.io/Essor/` — exactement
+     l'adresse de l'application, barre finale comprise ;
+   - téléchargez la **clé privée** (fichier PEM) et notez l'**application ID**.
+2. **Cloudflare** — dash.cloudflare.com → Workers & Pages → *Create Worker* ;
+   collez le contenu de `relais-cloudflare.js` (à la racine du dépôt de
+   l'application). Dans Settings → Variables, créez les secrets `EB_APP_ID`,
+   `EB_CLE_PRIVEE` (tout le PEM), `RELAIS_CLE` (un mot de passe long que vous
+   inventez) et la variable `ORIGINES` (`https://VOTRE-COMPTE.github.io`).
+   Déployez : l'adresse `https://….workers.dev` est celle du relais.
+3. **Essor** — Réglages → Connexion bancaire : collez l'adresse du relais et
+   la `RELAIS_CLE`, puis « Autoriser cette banque… ». La page part chez la
+   banque (authentification forte), revient, et vous rattachez chaque compte
+   bancaire à son compte Essor. La synchronisation se fait ensuite toute
+   seule à l'ouverture, au plus une fois toutes les 6 heures.
+
+À l'expiration du consentement, Essor le signale — « Renouveler » relance le
+même parcours. Les fichiers restent utilisables à tout moment : connexion et
+imports se croisent sans doublon.
+
+## 9. Publier une mise à jour
 
 `git push` sur le dépôt de l'application.
 
