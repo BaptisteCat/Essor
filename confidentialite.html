@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Essor — Politique de confidentialité</title>
+<style>
+  body { background: #0b0e13; color: #e9edf4; font: 15px/1.65 -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 680px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { color: #f3c96b; font-size: 24px; }
+  h2 { color: #f7d98c; font-size: 16px; margin-top: 28px; }
+  a { color: #f7d98c; }
+  .date { color: #8b95a8; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Essor — Politique de confidentialité</h1>
+<p class="date">Dernière mise à jour : 31 août 2026</p>
+
+<p>Essor est une application <b>personnelle</b> de suivi budgétaire et patrimonial.
+Elle n'a qu'un utilisateur : son propriétaire. Elle n'est ni un service commercial,
+ni ouverte à l'inscription.</p>
+
+<h2>Données traitées</h2>
+<p>Avec le consentement explicite de l'utilisateur (authentification forte auprès de
+sa banque, au titre de la DSP2), l'application accède en <b>lecture seule</b> aux
+informations de ses propres comptes : soldes et opérations. Ces données sont
+récupérées via <a href="https://enablebanking.com">Enable Banking</a>, prestataire
+agréé d'information sur les comptes, puis transitent par un relais technique
+(Cloudflare Worker) appartenant à l'utilisateur, qui ne conserve rien.</p>
+
+<h2>Stockage</h2>
+<p>Les données sont conservées exclusivement sur les appareils de l'utilisateur et
+dans un dépôt privé lui appartenant, <b>chiffrées de bout en bout</b> (AES-256-GCM)
+par une clé dérivée d'une phrase de passe que lui seul connaît. Aucun serveur de
+l'application ne stocke de données : l'application est un site statique.</p>
+
+<h2>Partage</h2>
+<p>Aucune donnée n'est vendue, partagée ni transmise à des tiers. Les seuls flux
+sortants sont ceux que l'utilisateur déclenche : interrogation de ses banques
+(via Enable Banking) et récupération de cours publics (identifiants d'actifs
+uniquement).</p>
+
+<h2>Durée et suppression</h2>
+<p>L'utilisateur peut à tout moment effacer ses données locales, supprimer son
+dépôt, et révoquer les consentements bancaires depuis l'espace client de sa banque
+ou dans l'application.</p>
+
+<h2>Contact</h2>
+<p>Pour toute question relative aux données : <a href="mailto:ramare@3ops.io">ramare@3ops.io</a></p>
+</body>
+</html>
