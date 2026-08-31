@@ -41,7 +41,7 @@ async function signerJwt(env) {
   const enc = (o) => b64url(new TextEncoder().encode(JSON.stringify(o)));
   const exp = now + 3600;
   // Un secret collé sous Windows embarque volontiers un retour chariot : un
-  // identifiant « 352e… » n'existe pour personne. On nettoie toujours.
+  // identifiant suivi d'un caractère invisible n'existe pour personne. On nettoie.
   const corps = enc({ typ: 'JWT', alg: 'RS256', kid: env.EB_APP_ID.trim() }) + '.' +
     enc({ iss: 'enablebanking.com', aud: 'api.enablebanking.com', iat: now, exp });
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', cle, new TextEncoder().encode(corps));
