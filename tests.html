@@ -693,6 +693,33 @@ try {
     bac.remove();
   }
 
+  /* ---- Fenêtre de l'historique mensuel ---- */
+  {
+    const S = fresh();
+    // 30 mois de mars 2024 à août 2026.
+    const mois = []; let m = '2024-03';
+    for (let i = 0; i < 30; i++) { mois.push(m); m = U.addMonths(m, 1); }
+
+    check('Historique — 12 derniers mois par défaut, jamais toute la courbe',
+      ScreenPatrimoine.fenetreHistorique(mois).length === 12 &&
+      ScreenPatrimoine.fenetreHistorique(mois)[11] === mois[29]);
+    S.settings.histo = { mode: '3' };
+    check('Historique — 3 mois', ScreenPatrimoine.fenetreHistorique(mois).join() === mois.slice(-3).join());
+    S.settings.histo = { mode: 'annee' };
+    check('Historique — année en cours : depuis janvier',
+      ScreenPatrimoine.fenetreHistorique(mois).every(x => x.startsWith(U.currentMonth().slice(0, 4))) &&
+      ScreenPatrimoine.fenetreHistorique(mois)[0].endsWith('-01'));
+    S.settings.histo = { mode: 'tout' };
+    check('Historique — tout : la courbe entière', ScreenPatrimoine.fenetreHistorique(mois).length === 30);
+    S.settings.histo = { mode: 'perso', de: '2025-01', a: '2025-06' };
+    check('Historique — personnalisé : bornes comprises',
+      ScreenPatrimoine.fenetreHistorique(mois).join() === '2025-01,2025-02,2025-03,2025-04,2025-05,2025-06');
+    S.settings.histo = { mode: 'perso', de: '2030-01', a: '2030-06' };
+    check('Historique — une fenêtre vide retombe sur 12 mois plutôt que sur rien',
+      ScreenPatrimoine.fenetreHistorique(mois).length === 12);
+    delete S.settings.histo;
+  }
+
   /* ---- Constats : ce qui a bougé dans les habitudes ---- */
   {
     const S = fresh();

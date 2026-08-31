@@ -353,14 +353,74 @@ const ScreenPatrimoine = {
       explication: libelles[S.projSavingsSource] || libelles.manuel };
   },
 
+  // Fenêtre d'historique retenue par l'utilisateur — 12 derniers mois par
+  // défaut : sur plusieurs années, la courbe complète écrase le présent.
+  fenetreHistorique(months) {
+    const pref = Store.state.settings.histo || { mode: '12' };
+    const annee = U.currentMonth().slice(0, 4);
+    switch (pref.mode) {
+      case '3': case '6': case '9': case '12': return months.slice(-Number(pref.mode));
+      case 'annee': return months.filter(m => m >= `${annee}-01`);
+      case 'tout': return months;
+      case 'perso': {
+        const de = pref.de || months[0], a = pref.a || months[months.length - 1];
+        const sel = months.filter(m => m >= de && m <= a);
+        return sel.length ? sel : months.slice(-12);
+      }
+      default: return months.slice(-12);
+    }
+  },
+
   renderHistory(months, snaps) {
     const holder = document.getElementById('pat-history');
-    const values = months.map(m => snaps[m].total);
-    Charts.line(holder, months, [
+    const pref = Store.state.settings.histo || { mode: '12' };
+    const retenus = ScreenPatrimoine.fenetreHistorique(months);
+
+    // Sélecteur de fenêtre, au-dessus de la courbe.
+    const CHOIX = [['3', '3 mois'], ['6', '6 mois'], ['9', '9 mois'], ['annee', 'Année en cours'],
+      ['12', '12 mois'], ['tout', 'Tout'], ['perso', 'Personnalisé']];
+    const zone = holder.parentElement;
+    zone.querySelectorAll('.histo-outils').forEach(x => x.remove());
+    holder.insertAdjacentHTML('beforebegin', `<div class="histo-outils">
+      <div class="histo-choix">${CHOIX.map(([v, l]) =>
+        `<button class="ghost ${pref.mode === v || (!Store.state.settings.histo && v === '12') ? 'actif' : ''}"
+           data-histo="${v}">${l}</button>`).join('')}</div>
+      ${pref.mode === 'perso' ? `<div class="row" style="margin-top:6px">
+        <label style="margin:0">De <input type="month" id="histo-de"
+          value="${pref.de || months[0]}" min="${months[0]}" max="${months[months.length - 1]}"></label>
+        <label style="margin:0">à <input type="month" id="histo-a"
+          value="${pref.a || months[months.length - 1]}" min="${months[0]}" max="${months[months.length - 1]}"></label>
+      </div>` : ''}
+    </div>`);
+    zone.querySelectorAll('[data-histo]').forEach(b => b.onclick = () => {
+      const mode = b.dataset.histo;
+      Store.state.settings.histo = mode === 'perso'
+        ? { mode, de: months[Math.max(0, months.length - 12)], a: months[months.length - 1],
+            ...(pref.mode === 'perso' ? pref : {}) , mode }
+        : { mode };
+      Store.markDirty();
+      zone.querySelector('table')?.remove();
+      ScreenPatrimoine.renderHistory(months, snaps);
+    });
+    const brancherMois = (id, cle) => {
+      const e = zone.querySelector('#' + id);
+      if (!e) return;
+      e.onchange = () => {
+        Store.state.settings.histo = { ...pref, mode: 'perso', [cle]: e.value };
+        Store.markDirty();
+        zone.querySelector('table')?.remove();
+        ScreenPatrimoine.renderHistory(months, snaps);
+      };
+    };
+    brancherMois('histo-de', 'de');
+    brancherMois('histo-a', 'a');
+
+    const values = retenus.map(m => snaps[m].total);
+    Charts.line(holder, retenus, [
       { name: 'Patrimoine net', values, color: Charts.COLORS.or, width: 2.5 },
     ], { height: 260 });
-    // Variation d'un mois sur l'autre (EX-8) — tableau des derniers mois.
-    const rows = months.slice(-6).map((m, i, arr) => {
+    // Variation d'un mois sur l'autre (EX-8) — les derniers mois de la fenêtre.
+    const rows = retenus.slice(-6).map((m) => {
       const v = snaps[m].total;
       const prevM = U.addMonths(m, -1);
       const pv = snaps[prevM] ? snaps[prevM].total : null;
@@ -368,6 +428,7 @@ const ScreenPatrimoine = {
         <td class="num">${U.fmtEUR(v)}</td>
         <td class="num">${pv != null ? UI.varia(v - pv) : '—'}</td></tr>`;
     }).join('');
+    zone.querySelector('table')?.remove();
     holder.insertAdjacentHTML('afterend',
       `<table style="margin-top:10px"><tr><th>Mois</th><th class="num">Patrimoine net</th><th class="num">Variation</th></tr>${rows}</table>`);
   },
