@@ -626,6 +626,76 @@ try {
     bac.remove();
   }
 
+  /* ---- Performance constatée : ce qui est un flux, ce qui n'en est pas ---- */
+  {
+    const S = fresh();
+    S.accounts.push({ id: 'pea', name: 'PEA', type: 'pea', order: 0 });
+    S.certifications.push({ id: 'c', accountId: 'pea', date: '2026-05-31', balance: 100000 });   // 1 000 €
+
+    // Un achat de titres : débit espèces + mouvement de titres, valeur du
+    // compte inchangée. L'ancien moteur voyait le débit comme un retrait et
+    // créditait un faux gain de +1 000 €.
+    S.transactions.push({ id: 'achat', accountId: 'pea', date: '2026-06-10', amount: -100000,
+      label: 'OPEN BUY 10 DCAM.FR', opType: 'Stocks/ETF purchase', settlement: true, hash: 'h1' });
+    S.trades.push({ id: 'tr', accountId: 'pea', symbol: 'DCAM.FR', date: '2026-06-10', qtyDelta: 10, priceCents: 10000 });
+    Engine.setPrice('DCAM.FR', '2026-06-10', 10000);
+    Engine.invalidate();
+    const p1 = Engine.monthlyPerformance('2026-06');
+    check('Perf — un achat de titres dans le compte ne crée aucun gain de marché',
+      p1.gain === 0, `gain=${p1.gain}`);
+
+    // Un dividende crédité est un GAIN, pas un dépôt.
+    S.transactions.push({ id: 'div', accountId: 'pea', date: '2026-07-05', amount: 1200,
+      label: 'DIVIDENDE DCAM', opType: 'Dividend', hash: 'h2' });
+    Engine.invalidate();
+    const p2 = Engine.monthlyPerformance('2026-07');
+    check('Perf — un dividende compte comme gain, jamais comme dépôt',
+      p2.gain === 1200, `gain=${p2.gain}`);
+
+    // Un vrai dépôt reste un flux : aucun gain.
+    S.transactions.push({ id: 'dep', accountId: 'pea', date: '2026-07-12', amount: 50000,
+      label: 'VIREMENT ENTRANT', hash: 'h3' });
+    Engine.invalidate();
+    const p3 = Engine.monthlyPerformance('2026-07');
+    check('Perf — un dépôt est un flux : le gain du mois ne bouge pas',
+      p3.gain === 1200, `gain=${p3.gain}`);
+
+    // Déclarer une détention (instantané) est un apport d'information, pas une
+    // performance : +13 000 € de « gain » le jour de la déclaration mentait.
+    S.accounts.push({ id: 'cr', name: 'Crypto', type: 'crypto', order: 1 });
+    S.certifications.push({ id: 'c2', accountId: 'cr', date: '2026-05-31', balance: 0 });
+    S.positionSnapshots.push({ id: 'sn', accountId: 'cr', symbol: 'BTC', date: '2026-07-15', qty: 0.1, source: 'saisie:cr:BTC' });
+    Engine.setPrice('BTC', '2026-07-15', 6000000);
+    Engine.invalidate();
+    const p4 = Engine.monthlyPerformance('2026-07');
+    check("Perf — déclarer 0,1 BTC n'est pas un gain : la déclaration est un apport",
+      p4.gain === 1200, `gain=${p4.gain}`);
+    check('Perf — la déclaration est bien chiffrée comme flux, au cours du jour',
+      Engine.declaredFlow('cr', '2026-06-30', '2026-07-31') === 600000);
+  }
+
+  /* ---- La nature de l'actif prime sur celle du compte ---- */
+  {
+    const S = fresh();
+    // Du bitcoin d'arrondis Revolut, logé sur le compte COURANT.
+    S.accounts.push({ id: 'rev', name: 'Revolut', type: 'courant', order: 0 });
+    S.certifications.push({ id: 'c', accountId: 'rev', date: '2026-01-01', balance: 50000 });
+    S.trades.push({ id: 't', accountId: 'rev', symbol: 'BTC', date: '2026-03-01', qtyDelta: 0.01 });
+    S.priceMeta.BTC = { name: 'Bitcoin', coingecko: 'bitcoin' };
+    Engine.setPrice('BTC', '2026-03-01', 6000000);
+    Engine.invalidate();
+    const v = Engine.accountValue('rev', '2026-08-31');
+    check('Classe — un compte courant qui détient du BTC le compte dans sa valeur',
+      v.total === 50000 + 60000, `total=${v.total}`);
+    const alloc = Engine.allocationByClass('2026-08-31');
+    check('Classe — ce bitcoin apparaît en « Crypto », jamais dilué dans le compte courant',
+      alloc.get('Crypto') === 60000 && alloc.get('Comptes courants') === 50000,
+      JSON.stringify([...alloc.entries()]));
+    check('Classe — la nature se déduit aussi de la table des actifs connus, sans métadonnée',
+      Engine._classOfSymbol('ETH', 'titres') === 'Crypto' &&
+      Engine._classOfSymbol('DCAM.FR', 'pea') === 'Actions');
+  }
+
   /* ---- Cours crypto : récupérés d'eux-mêmes, et pour les bons actifs ---- */
   {
     const S = fresh();

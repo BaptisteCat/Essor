@@ -157,36 +157,103 @@ const ScreenOperations = {
     ScreenOperations.renderAccounts();
   },
 
+  // Plafonds réglementaires des livrets, en centimes : les proposer évite une
+  // recherche, et surtout une confusion — le plafond borne les VERSEMENTS,
+  // jamais les intérêts, qui peuvent le dépasser.
+  LIVRETS_CONNUS: [
+    { re: /livret\s*a\b|^la$/i, plafond: 2295000, nom: 'Livret A' },
+    { re: /ldds|d[ée]veloppement\s*durable/i, plafond: 1200000, nom: 'LDDS' },
+    { re: /lep\b|[ée]pargne\s*populaire/i, plafond: 1000000, nom: 'LEP' },
+    { re: /livret\s*jeune/i, plafond: 159900, nom: 'Livret Jeune' },
+    { re: /\bcel\b/i, plafond: 1530000, nom: 'CEL' },
+    { re: /\bpel\b/i, plafond: 6120000, nom: 'PEL' },
+  ],
+
   accountModal(id) {
     const a = id ? Engine.account(id) : null;
     const types = Object.entries(ACCOUNT_TYPES).map(([k, t]) =>
       `<option value="${k}" ${a && a.type === k ? 'selected' : ''}>${t.label}</option>`).join('');
     const m = UI.modal(`
       <h2>${a ? 'Modifier le compte' : 'Nouveau compte'}</h2>
-      <div class="field"><label>Nom</label><input id="ac-name" value="${a ? U.escapeHtml(a.name) : ''}" placeholder="Livret A, CTO Bourso…"></div>
       <div class="row">
-        <div class="field"><label>Nature (comportement propre : rendement, plafond…)</label><select id="ac-type">${types}</select></div>
-        <div class="field"><label>Plafond réglementaire (optionnel)</label>${UI.amountInput('ac-plafond', a ? a.plafond : null, 'ex. 22 950')}</div>
-        <div class="field"><label>Frais annuels (%)</label>
-          <input id="ac-fees" class="amount" size="5" value="${a && a.feesRate ? (a.feesRate * 100).toLocaleString('fr-FR') : ''}" placeholder="0"></div>
+        <div class="field" style="flex:1;min-width:180px"><label>Nom</label>
+          <input id="ac-name" value="${a ? U.escapeHtml(a.name) : ''}" placeholder="Livret A, CTO Bourso…"></div>
+        <div class="field"><label>Nature</label><select id="ac-type">${types}</select></div>
       </div>
-      <div class="hint">Les frais annuels (gestion d'AV, TER moyen…) sont déduits du rendement
-      dans la projection — 0,8 % par an pendant 20 ans, c'est un cinquième du capital final.</div>
+      <div class="hint" id="ac-nature-hint"></div>
+
       <div class="row" style="margin-top:8px">
-        <div class="field"><label>Année d'ouverture — fiscalité PEA/AV</label>
+        <div class="field" data-champ="plafond"><label>Plafond de versement</label>
+          ${UI.amountInput('ac-plafond', a ? a.plafond : null, 'ex. 22 950')}</div>
+        <div class="field" data-champ="fees"><label>Frais annuels (%)</label>
+          <input id="ac-fees" class="amount" size="5" value="${a && a.feesRate ? (a.feesRate * 100).toLocaleString('fr-FR') : ''}" placeholder="0"></div>
+        <div class="field" data-champ="open"><label>Année d'ouverture</label>
           <input id="ac-open" class="amount" size="6" value="${a && a.openedYear ? a.openedYear : ''}" placeholder="2021"></div>
-        <div class="field"><label>Fiscalité de sortie (%) — vide : règle de l'enveloppe</label>
-          <input id="ac-tax" class="amount" size="5" value="${a && a.taxRateOverride != null ? (a.taxRateOverride * 100).toLocaleString('fr-FR') : ''}" placeholder="auto"></div>
       </div>
-      <div class="hint">Sans année d'ouverture, PEA et AV sont supposés mûrs à l'horizon (5 et 8 ans).
-      Le taux personnalisé sert aux cas particuliers : livret bancaire fiscalisé (30), bien locatif…</div>
-      <div class="field"><label>Indices de reconnaissance à l'import — IBAN, n° de compte, morceau du nom de fichier (un par ligne)</label>
-        <textarea id="ac-fp" rows="2" style="width:100%" placeholder="FR7612345678901234567890123">${a && a.fingerprints ? U.escapeHtml(a.fingerprints.join('\n')) : ''}</textarea></div>
-      ${a ? `<div class="field"><label><input type="checkbox" id="ac-closed" ${a.closed ? 'checked' : ''} style="width:auto"> Compte clôturé (exclu du patrimoine)</label></div>` : ''}
+      <div class="hint" id="ac-champ-hint"></div>
+
+      <details style="margin-top:8px" ${a && (a.taxRateOverride != null || (a.fingerprints || []).length) ? 'open' : ''}>
+        <summary class="small clickable" style="color:var(--texte-faible)">Réglages avancés — fiscalité personnalisée, reconnaissance à l'import</summary>
+        <div class="row" style="margin-top:8px">
+          <div class="field"><label>Fiscalité de sortie (%) — vide : règle de l'enveloppe</label>
+            <input id="ac-tax" class="amount" size="5" value="${a && a.taxRateOverride != null ? (a.taxRateOverride * 100).toLocaleString('fr-FR') : ''}" placeholder="auto"></div>
+        </div>
+        <div class="hint" id="ac-tax-hint"></div>
+        <div class="field" style="margin-top:8px"><label>Indices de reconnaissance à l'import — IBAN, n° de compte, morceau du nom de fichier (un par ligne)</label>
+          <textarea id="ac-fp" rows="2" style="width:100%" placeholder="FR7612345678901234567890123">${a && a.fingerprints ? U.escapeHtml(a.fingerprints.join('\n')) : ''}</textarea></div>
+      </details>
+      ${a ? `<div class="field" style="margin-top:8px"><label><input type="checkbox" id="ac-closed" ${a.closed ? 'checked' : ''} style="width:auto"> Compte clôturé (exclu du patrimoine)</label></div>` : ''}
       <div class="actions">
         <button class="ghost" data-x="cancel">Annuler</button>
         <button class="primary" data-x="ok">${a ? 'Enregistrer' : 'Créer'}</button>
       </div>`);
+
+    // La fiche s'adapte à la nature : chaque champ n'apparaît que là où il a
+    // un sens, et l'aide dit ce que la nature choisie change réellement au
+    // calcul — rendement projeté, fiscalité de sortie, plafond d'allocation.
+    const selType = m.el.querySelector('#ac-type');
+    const nomInput = m.el.querySelector('#ac-name');
+    const montrer = (champ, oui) => { m.el.querySelector(`[data-champ="${champ}"]`).style.display = oui ? '' : 'none'; };
+    const S = Store.state.settings;
+    const pctType = (t) => ((S.returns[t] || 0) * 100).toLocaleString('fr-FR') + ' %/an';
+    const adapter = () => {
+      const t = selType.value;
+      montrer('plafond', t === 'livret' || t === 'pea' || t === 'av');
+      montrer('fees', ['titres', 'pea', 'av', 'crypto', 'immo'].includes(t));
+      montrer('open', t === 'pea' || t === 'av');
+      const natures = {
+        courant: `Trésorerie du quotidien : rendement projeté ${pctType('courant')}, jamais compté comme placement, exonéré à la sortie.`,
+        livret: `Placement sans risque : rendement projeté ${pctType('livret')}, exonéré s'il est réglementé. Le plafond borne les versements de l'allocation — les intérêts peuvent le dépasser.`,
+        titres: `Compte-titres : rendement projeté ${pctType('titres')}, gains imposés au PFU 30 % à la sortie.`,
+        pea: `PEA : rendement projeté ${pctType('pea')} ; après 5 ans, seuls 17,2 % de prélèvements sociaux sur les gains — c'est tout l'intérêt de l'enveloppe. Le plafond légal de versement est de 150 000 €.`,
+        av: `Assurance-vie : rendement projeté ${pctType('av')} net des frais ci-dessous ; après 8 ans, 17,2 % + 7,5 % au-delà de l'abattement.`,
+        crypto: `Actifs déclarés par quantité, cours récupérés automatiquement ; gains imposés à la flat tax 30 %.`,
+        immo: `Valorisation par certification de valeur ; résidence principale exonérée, locatif : renseignez la fiscalité personnalisée.`,
+        autre: `Nature neutre : ni rendement projeté, ni fiscalité — pour ce qui n'entre dans aucune case.`,
+      };
+      m.el.querySelector('#ac-nature-hint').textContent = natures[t] || '';
+      m.el.querySelector('#ac-champ-hint').textContent =
+        (t === 'pea' || t === 'av')
+          ? `L'année d'ouverture décide la fiscalité de sortie (${t === 'pea' ? '5' : '8'} ans de maturité) ; sans elle, l'enveloppe est supposée mûre à l'horizon — hypothèse favorable. Les frais annuels sont déduits du rendement projeté.`
+          : ['titres', 'crypto', 'immo'].includes(t)
+            ? 'Les frais annuels (TER moyen, garde…) sont déduits du rendement projeté — 0,8 % pendant 20 ans, c\'est un cinquième du capital final.'
+            : '';
+      m.el.querySelector('#ac-tax-hint').textContent = 'Pour les cas que la règle de l\'enveloppe ne couvre pas : livret bancaire fiscalisé (30), bien locatif… Ce taux remplace alors la règle.';
+      // Livret nommé : le plafond réglementaire se propose tout seul.
+      if (t === 'livret') {
+        const connu = ScreenOperations.LIVRETS_CONNUS.find(l => l.re.test(nomInput.value));
+        const champ = m.el.querySelector('#ac-plafond');
+        if (connu && !UI.readAmount(champ)) {
+          champ.value = (connu.plafond / 100).toLocaleString('fr-FR', { useGrouping: false });
+          m.el.querySelector('#ac-champ-hint').textContent =
+            `Plafond réglementaire du ${connu.nom} proposé : ${U.fmtEUR(connu.plafond)}. Il borne les versements, pas les intérêts.`;
+        }
+      }
+    };
+    selType.onchange = adapter;
+    nomInput.oninput = () => { if (selType.value === 'livret') adapter(); };
+    adapter();
+
     m.el.querySelector('[data-x="cancel"]').onclick = m.close;
     m.el.querySelector('[data-x="ok"]').onclick = () => {
       const name = m.el.querySelector('#ac-name').value.trim();

@@ -148,7 +148,10 @@ const Engine = {
     const acc = Engine.account(accountId);
     if (!acc) return null;
     const cash = Engine.cashBalance(accountId, date);
-    const hasPos = ACCOUNT_TYPES[acc.type]?.positions;
+    // La nature du compte dit s'il est CENSÉ porter des positions ; s'il en
+    // porte quand même (arrondis convertis en bitcoin sur un courant), elles
+    // comptent — sans quoi cet argent disparaissait du patrimoine.
+    const hasPos = ACCOUNT_TYPES[acc.type]?.positions || Engine.symbolsOf(accountId).length > 0;
     const pos = hasPos ? Engine.positionsValue(accountId, date) : { value: 0, detail: [] };
     if (cash === null && !pos.detail.length) return null;
     return { cash: cash ?? 0, cashKnown: cash !== null, positions: pos.value, detail: pos.detail, total: (cash ?? 0) + pos.value };
@@ -257,12 +260,15 @@ const Engine = {
       const v = Engine.accountValue(a.id, date);
       if (!v) continue;
       const meta = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES.autre;
-      if (meta.positions) {
+      if (meta.positions || v.detail.length) {
+        // La classe des espèces suit la nature du COMPTE : sur un courant qui
+        // héberge du bitcoin d'arrondis, le solde reste du compte courant.
+        const classeCash = meta.positions ? (meta.cashClasse || 'Espèces sur comptes-titres') : meta.classe;
         // Les liquidités d'un compte d'investissement restent des liquidités (EX-6).
         // Nommer précisément : « Liquidités » tout court se confondait avec
         // les comptes courants, alors qu'il s'agit ici de l'argent versé sur
         // un compte-titres et pas encore placé (EX-6).
-        if (v.cash) add(meta.cashClasse || 'Espèces sur comptes-titres', v.cash);
+        if (v.cash) add(classeCash, v.cash);
         for (const d of v.detail) add(Engine._classOfSymbol(d.symbol, a.type), d.value);
       } else {
         add(meta.classe, v.total);
@@ -274,7 +280,11 @@ const Engine = {
   _classOfSymbol(symbol, accountType) {
     const meta = Engine.S().priceMeta[symbol];
     if (meta && meta.classe) return meta.classe;
+    // La nature de l'ACTIF prime sur celle du compte : du bitcoin converti
+    // depuis des arrondis Revolut vit sur le compte courant, il n'en est pas
+    // moins de la crypto — le classer « Actions » mentait sur l'exposition.
     if (accountType === 'crypto') return 'Crypto';
+    if ((meta && meta.coingecko) || (typeof Cours !== 'undefined' && Cours.IDS[symbol])) return 'Crypto';
     return 'Actions';
   },
 
@@ -354,22 +364,68 @@ const Engine = {
       vEnd += v1 ? v1.total : 0;
     }
     for (const t of S.transactions) {
-      if (t.date > startDate && t.date <= endDate && !Engine._isInterest(t)) flows += t.amount;
+      if (t.date > startDate && t.date <= endDate && Engine._isExternalFlow(t)) flows += t.amount;
+    }
+    for (const a of S.accounts) {
+      if (!a.closed) flows += Engine.declaredFlow(a.id, startDate, endDate);
     }
     const gain = vEnd - vStart - flows;
     return { month, vStart, vEnd, flows, gain, rate: vStart > 0 ? gain / vStart : null };
   },
 
+  // Un GAIN crédité sur le compte — intérêts, dividendes, coupons — n'est pas
+  // un dépôt : le compter comme flux externe retranchait chaque dividende de
+  // la performance constatée.
   _isInterest(t) {
     if (t.kind === 'interet') return true;
-    return /INTERETS?|INTÉRÊTS?/.test((t.label || '').toUpperCase());
+    if (t.opType && /^(div|dividend|coupon|interest|int[ée]r[êe]t)/i.test(t.opType)) return true;
+    return /INTERETS?|INTÉRÊTS?|DIVIDENDES?/.test((t.label || '').toUpperCase());
+  },
+
+  // Le règlement espèces d'un achat ou d'une vente de titres n'est pas un
+  // flux externe : l'argent n'a pas quitté le compte, il a changé de forme.
+  // Le compter comme un retrait créditait chaque achat d'un faux gain de
+  // marché du même montant. Les imports récents portent le drapeau
+  // `settlement` ; pour les anciens, le type d'opération du courtier suffit —
+  // jamais le libellé, où « ACHAT CB CARREFOUR » ferait un faux positif.
+  _isSettlement(t) {
+    if (t.settlement) return true;
+    return !!(t.opType && /(stocks?|etf|titres?|shares?).*(purchase|sale|achat|vente)|^(buy|sell)$/i.test(t.opType));
+  },
+
+  // Flux externe du point de vue de la performance : tout ce qui traverse la
+  // frontière du compte — ni gain crédité, ni règlement de titres.
+  _isExternalFlow(t) { return !Engine._isInterest(t) && !Engine._isSettlement(t); },
+
+  // Quantités apparues par DÉCLARATION sur la période — un instantané saisi à
+  // la main ou importé d'un rapport, sans mouvement qui l'explique. Déclarer
+  // 0,08 BTC n'est pas une performance : c'est un apport d'information, que la
+  // mesure de gain doit traiter comme un flux, valorisé au cours de fin.
+  declaredFlow(accountId, startDate, endDate) {
+    const S = Engine.S();
+    let flow = 0;
+    for (const sym of Engine.symbolsOf(accountId)) {
+      const q0 = Engine.qtyAt(accountId, sym, startDate);
+      const q1 = Engine.qtyAt(accountId, sym, endDate);
+      let dTrades = 0;
+      for (const t of S.trades) {
+        if (t.accountId === accountId && t.symbol === sym &&
+            t.date > startDate && t.date <= endDate) dTrades += t.qtyDelta;
+      }
+      const declared = q1 - q0 - dTrades;
+      if (Math.abs(declared) > 1e-9) {
+        const p = Engine.priceAt(sym, endDate);
+        if (p) flow += U.roundCents(declared * p.price);
+      }
+    }
+    return flow;
   },
 
   // Plus-value latente d'un compte à positions, quand les PRU sont connus
   // (EX-12). Null si rien n'est calculable.
   latentGain(accountId, date) {
     const a = Engine.account(accountId);
-    if (!a || !ACCOUNT_TYPES[a.type]?.positions) return null;
+    if (!a) return null;
     const v = Engine.accountValue(accountId, date || U.today());
     if (!v || !v.detail.length) return null;
     let cost = 0, has = false;
@@ -404,7 +460,7 @@ const Engine = {
     // Flux par compte et par mois, les intérêts comptant comme des gains (EX-43).
     const flows = new Map();
     for (const t of S.transactions) {
-      if (Engine._isInterest(t)) continue;
+      if (!Engine._isExternalFlow(t)) continue;
       const k = t.accountId + '|' + U.monthOf(t.date);
       flows.set(k, (flows.get(k) || 0) + t.amount);
     }
@@ -418,7 +474,8 @@ const Engine = {
         const v0 = Engine.accountValue(a.id, start);
         const v1 = Engine.accountValue(a.id, end);
         if (!v0 || !v1 || v0.total <= 0) continue;
-        gains[a.type] = (gains[a.type] || 0) + (v1.total - v0.total - (flows.get(a.id + '|' + m) || 0));
+        gains[a.type] = (gains[a.type] || 0) + (v1.total - v0.total
+          - (flows.get(a.id + '|' + m) || 0) - Engine.declaredFlow(a.id, start, end));
         bases[a.type] = (bases[a.type] || 0) + v0.total;
       }
       for (const type in bases) {

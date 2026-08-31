@@ -756,6 +756,9 @@ const Importer = {
         S.transactions.push(t);
         added++;
         if (row.qty && row.symbol) {
+          // Règlement de titres : l'argent change de forme, il ne sort pas du
+          // compte — la performance constatée ne doit pas le voir comme un flux.
+          t.settlement = true;
           // Ligne de courtier : mouvement de titres. Achat = débit espèces → quantité positive.
           S.trades.push({
             id: U.uid(), accountId, symbol: row.symbol, date: row.date,

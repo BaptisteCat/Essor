@@ -6,6 +6,8 @@
 
 const ScreenReglages = {
 
+  _toutesNatures: false,
+
   render() {
     document.getElementById('screen-title').innerHTML =
       `<h1>Réglages</h1><div class="small">Hypothèses, cibles, crédits, objectifs, cours</div>`;
@@ -23,7 +25,14 @@ const ScreenReglages = {
               <th class="num" title="Rendement annualisé réellement constaté sur vos mois complets, hors versements">Constaté</th></tr>
             ${(() => {
               const constate = Engine.realizedByType();
-              return Object.entries(ACCOUNT_TYPES).map(([k, t]) => {
+              // Ne parler que des natures que ce patrimoine possède : huit
+              // lignes d'hypothèses dont cinq ne servent à rien noyaient les
+              // trois qui comptent. Les autres apparaissent à la demande.
+              const enUsage = new Set(Store.state.accounts.filter(a => !a.closed).map(a => a.type));
+              const toutes = ScreenReglages._toutesNatures || !enUsage.size;
+              return Object.entries(ACCOUNT_TYPES)
+                .filter(([k]) => toutes || enUsage.has(k))
+                .map(([k, t]) => {
                 const c = constate[k];
                 const affiche = c
                   ? `<span class="${Math.abs(c.annual - (s.returns[k] || 0)) > 0.03 ? 'down' : 'muted'}"
@@ -41,7 +50,10 @@ const ScreenReglages = {
             })()}
           </table>
           <div class="hint">« Constaté » = ce que vos comptes ont réellement produit, hors versements —
-          à confronter à vos hypothèses. Rouge si l'écart dépasse 3 points.</div>
+          à confronter à vos hypothèses. Rouge si l'écart dépasse 3 points.
+          <button class="lien" id="rg-toutes-natures">${ScreenReglages._toutesNatures
+            ? 'Ne montrer que les natures de mes comptes'
+            : 'Montrer toutes les natures'}</button></div>
           <div class="row" style="margin-top:12px">
             <div class="field"><label>Inflation annuelle</label>
               <input id="rg-infl" class="amount" size="5" value="${(s.inflation * 100).toLocaleString('fr-FR')}"> %</div>
@@ -124,6 +136,10 @@ const ScreenReglages = {
       s.savingsFollowInflation = document.getElementById('rg-savinfl').checked;
       Engine.invalidate();
       UI.toast('Hypothèses enregistrées.');
+    };
+    document.getElementById('rg-toutes-natures').onclick = () => {
+      ScreenReglages._toutesNatures = !ScreenReglages._toutesNatures;
+      ScreenReglages.render();
     };
     document.getElementById('rg-add-credit').onclick = () => ScreenReglages.creditModal();
     document.getElementById('rg-add-goal').onclick = () => ScreenReglages.goalModal();
@@ -592,8 +608,18 @@ const ScreenReglages = {
   renderSymbols() {
     const S = Store.state;
     const holder = document.getElementById('rg-symbols');
-    const syms = new Set([...Object.keys(S.prices), ...S.trades.map(t => t.symbol)]);
+    const syms = new Set([...Object.keys(S.prices), ...S.trades.map(t => t.symbol),
+      ...S.positionSnapshots.map(x => x.symbol)]);
     if (!syms.size) { holder.innerHTML = '<div class="empty">Aucun support — les positions se déclarent dans Opérations.</div>'; return; }
+    // Chaque bloc de ce panneau suppose une donnée : pas de donnée, pas de
+    // bloc. La géographie ne concerne que les fonds (jamais la crypto), les
+    // cours automatiques que la crypto, les arrondis qu'un motif ou un compte
+    // crypto existant.
+    const estCrypto = (sym) => !!((S.priceMeta[sym] || {}).coingecko || Cours.IDS[sym]);
+    const aDeLaCrypto = [...syms].some(estCrypto);
+    const aDesFonds = [...syms].some(sym => !estCrypto(sym));
+    const montrerArrondis = !!S.settings.btcRoundUpPattern ||
+      S.accounts.some(a => a.type === 'crypto' && !a.closed);
     holder.innerHTML = `<table><tr><th>Support</th><th class="num">Dernier cours</th><th class="num">PRU</th>
       <th>Répartition géographique</th><th></th></tr>
       ${[...syms].sort().map(sym => {
@@ -615,7 +641,7 @@ const ScreenReglages = {
           <td class="small">${geoStr}</td>
           <td class="right"><button class="ghost" data-sym="${U.escapeHtml(sym)}">gérer</button></td></tr>`;
       }).join('')}</table>
-      <div class="notice" style="margin-top:12px">
+      ${aDesFonds ? `<div class="notice" style="margin-top:12px">
         <b>Répartition géographique.</b> Elle est déduite automatiquement de l'indice suivi par
         chaque fonds (reconnu d'après son nom et son code) — vous n'avez rien à saisir.
         Ce sont les poids publiés de l'indice ; pour les poids réels du fonds, un fournisseur
@@ -632,8 +658,8 @@ const ScreenReglages = {
           du fonds sont, depuis 2025, un accès <b>payant</b> chez Financial Modeling Prep — une clé
           gratuite répondra « non inclus dans votre formule ». Avec une clé, seul le code du support
           sort de la machine, comme pour les cours.</div>
-      </div>
-      <div class="notice" style="margin-top:12px">
+      </div>` : ''}
+      ${montrerArrondis ? `<div class="notice" style="margin-top:12px">
         <b>Arrondis convertis en bitcoin.</b> Si votre carte arrondit chaque paiement et
         convertit la différence en BTC, ces petits débits sortent de votre patrimoine alors
         que l'argent a seulement changé de forme. Essor peut les transformer en position
@@ -646,8 +672,8 @@ const ScreenReglages = {
           <button id="rg-btc-go">Convertir les arrondis</button>
         </div>
         <div class="hint">Rejouable sans risque : une opération déjà convertie ne l'est jamais deux fois.</div>
-      </div>
-      <div class="row" style="margin-top:10px">
+      </div>` : ''}
+      ${aDeLaCrypto ? `<div class="row" style="margin-top:10px">
         <div class="row" style="align-items:center">
           <button id="rg-fetch-crypto">Mettre à jour les cours crypto maintenant</button>
           <div class="field" style="margin:0"><label>
@@ -662,31 +688,33 @@ const ScreenReglages = {
           identifiants d'actifs (« bitcoin », « ethereum ») sortent de la machine — jamais vos
           quantités ni vos montants. Sans réseau, la valorisation garde le dernier cours connu.</div>
         <span class="hint">Les autres cours se saisissent manuellement ou via un relevé de courtier — l'application fonctionne entièrement hors ligne, la mise à jour des cours est la seule exception.</span>
-      </div>`;
+      </div>` : ''}`;
     holder.querySelectorAll('[data-sym]').forEach(b => b.onclick = () => ScreenReglages.symbolModal(b.dataset.sym));
-    document.getElementById('rg-fetch-crypto').onclick = (e) => UI.busy(e.target, () => ScreenReglages.fetchCrypto());
-    document.getElementById('rg-cours-auto').onchange = (e) => {
+    // Les blocs sont conditionnels : ne brancher que ce qui est à l'écran.
+    const si = (id, ev, fn) => { const e = document.getElementById(id); if (e) e[ev] = fn; };
+    si('rg-fetch-crypto', 'onclick', (e) => UI.busy(e.target, () => ScreenReglages.fetchCrypto()));
+    si('rg-cours-auto', 'onchange', (e) => {
       S.settings.coursAuto = e.target.checked;
       Store.markDirty();
       UI.toast(e.target.checked ? "Les cours se mettront à jour à l'ouverture." : 'Mise à jour automatique désactivée.');
-    };
-    document.getElementById('rg-cours-h').onchange = (e) => {
+    });
+    si('rg-cours-h', 'onchange', (e) => {
       S.settings.coursIntervalleH = Number(e.target.value);
       Store.markDirty();
-    };
+    });
     // La clé déjà enregistrée est replacée dans le champ après rendu (un champ
     // secret ne porte pas sa valeur dans le HTML).
     const champFmp = document.getElementById('rg-fmp');
     if (champFmp) champFmp.value = S.settings.fmpKey || '';
-    document.getElementById('rg-rededuce').onclick = (e) => UI.busy(e.target, async () => {
+    si('rg-rededuce', 'onclick', (e) => UI.busy(e.target, async () => {
       const faits = Indices.applyAll({ force: true });
       const restants = Indices.nonDeduits();
       UI.toast(`${faits.length} support(s) rattaché(s) à leur indice.` +
         (restants.length ? ` Non reconnus : ${restants.map(U.escapeHtml).join(', ')}.` : ''));
       ScreenReglages.renderSymbols();
-    });
-    document.getElementById('rg-fetch-geo').onclick = (e) => UI.busy(e.target, () => ScreenReglages.fetchGeo());
-    document.getElementById('rg-btc-go').onclick = (e) => UI.busy(e.target, () => ScreenReglages.convertirArrondis());
+    }));
+    si('rg-fetch-geo', 'onclick', (e) => UI.busy(e.target, () => ScreenReglages.fetchGeo()));
+    si('rg-btc-go', 'onclick', (e) => UI.busy(e.target, () => ScreenReglages.convertirArrondis()));
   },
 
   // Répartitions géographiques types des grands indices. Ce ne sont pas des

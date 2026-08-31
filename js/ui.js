@@ -361,3 +361,87 @@ document.addEventListener('click', (e) => {
   const n = champ.value.length;
   try { champ.setSelectionRange(n, n); } catch { /* type=text seulement */ }
 });
+
+/* ---------- Fiches : la navigation du téléphone ----------
+
+   Sur ordinateur, les écrans posent leurs cartes côte à côte et tout se voit.
+   Au téléphone, le même contenu devenait un mur de tableaux serrés. Chaque
+   carte se replie donc en une LIGNE — son titre, son chiffre-clé — et s'ouvre
+   en pleine page d'un toucher, avec un retour. On navigue, on ne défile plus.
+
+   Les cartes de synthèse (chiffres-clés) restent toujours visibles : ce sont
+   elles, l'écran. Le pliage est purement visuel — aucun contenu n'est
+   reconstruit, les gestionnaires d'événements restent en place. */
+
+UI.estMobile = () => window.matchMedia('(max-width: 820px)').matches;
+UI._ficheOuverte = null;
+
+UI.fiches = function () {
+  const inner = document.getElementById('content-inner');
+  if (!inner) return;
+  inner.querySelectorAll('.card').forEach(card => {
+    if (card.dataset.fiche) {
+      UI._ficheResume(card);   // le chiffre-clé peut avoir changé au re-rendu
+      return;
+    }
+    const h2 = card.querySelector('h2');
+    if (!h2) return;                              // sans titre : toujours visible
+    if (card.querySelector('.kpi-val')) return;   // synthèse : c'est l'écran lui-même
+    card.dataset.fiche = '1';
+    card.classList.add('fiche');
+    // Le h2 porte souvent un sous-titre (« Projection — inflation 2 %… ») :
+    // la ligne repliée n'a besoin que du nom.
+    const titre = h2.textContent.replace(/\s+/g, ' ').trim().split(' — ')[0].slice(0, 40);
+
+    const tete = document.createElement('button');
+    tete.type = 'button';
+    tete.className = 'fiche-tete';
+    tete.innerHTML = `<span class="fiche-titre">${U.escapeHtml(titre)}</span>
+      <span class="fiche-resume"></span><span class="fiche-chev">›</span>`;
+    const barre = document.createElement('div');
+    barre.className = 'fiche-barre';
+    barre.innerHTML = `<button type="button" class="fiche-retour">‹</button>
+      <span class="fiche-barre-titre">${U.escapeHtml(titre)}</span>`;
+    card.prepend(barre);
+    card.prepend(tete);
+
+    const ouvrir = () => {
+      document.querySelectorAll('.card.fiche.ouverte').forEach(c => c.classList.remove('ouverte'));
+      card.classList.add('ouverte');
+      document.body.classList.add('fiche-ouverte');
+      UI._ficheOuverte = titre;
+      card.scrollTop = 0;
+      window.dispatchEvent(new Event('resize'));  // un graphique rendu plié se recale
+    };
+    const fermer = () => {
+      card.classList.remove('ouverte');
+      document.body.classList.remove('fiche-ouverte');
+      UI._ficheOuverte = null;
+    };
+    tete.onclick = ouvrir;
+    barre.querySelector('.fiche-retour').onclick = fermer;
+    card._fermerFiche = fermer;
+
+    UI._ficheResume(card);
+    // Une fiche ouverte avant un re-rendu de l'écran se rouvre d'elle-même.
+    if (UI._ficheOuverte === titre) ouvrir();
+  });
+};
+
+// Le chiffre qui résume la fiche sans l'ouvrir : le premier total qu'elle
+// affiche, ou à défaut le nombre de lignes de son tableau.
+UI._ficheResume = function (card) {
+  const zone = card.querySelector('.fiche-tete .fiche-resume');
+  if (!zone) return;
+  const val = card.querySelector('.stat-val');
+  if (val && val.textContent.trim()) { zone.textContent = val.textContent.trim().slice(0, 18); return; }
+  const lignes = card.querySelectorAll('table tr').length;
+  zone.textContent = lignes > 1 ? `${lignes - 1} ligne${lignes > 2 ? 's' : ''}` : '';
+};
+
+// Échap ferme la fiche ouverte, comme une modale.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const ouverte = document.querySelector('.card.fiche.ouverte');
+  if (ouverte && ouverte._fermerFiche && !document.querySelector('.modal-back')) ouverte._fermerFiche();
+});

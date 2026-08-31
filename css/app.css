@@ -714,3 +714,65 @@ ol.pas-a-pas b { color: var(--texte); display: inline; margin: 0; }
   .modal table { font-size: 12px; }
   .modal th, .modal td { padding: 6px 4px; }
 }
+
+/* ---------- Fiches : cartes repliées en lignes, ouvertes en pages ---------- */
+
+.fiche-tete, .fiche-barre { display: none; }
+
+@media (max-width: 820px) {
+  /* Le titre d'écran fait doublon avec l'onglet actif : sa place revient au contenu. */
+  #topbar .title-zone { display: none; }
+  #topbar { margin-bottom: 10px; }
+
+  /* Repliée : une ligne, un titre, un chiffre, un chevron. */
+  #content-inner .card.fiche { padding: 0; margin-bottom: 8px; overflow: hidden; }
+  #content-inner .card.fiche:not(.ouverte) > *:not(.fiche-tete) { display: none; }
+  .fiche-tete {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 14px; min-height: 52px;
+    background: none; border: none; text-align: left;
+    font: inherit; color: var(--texte); cursor: pointer;
+  }
+  .fiche-tete:hover { background: var(--bg3); border: none; color: var(--texte); }
+  .fiche-titre {
+    font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+    background-image: var(--gold-text-grad); background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .fiche-resume {
+    margin-left: auto; font-size: 13px; color: var(--texte-faible);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .fiche-chev { color: var(--texte-faible); font-size: 18px; line-height: 1; }
+
+  /* Ouverte : une page à part entière, avec sa barre de retour. */
+  #content-inner .card.fiche.ouverte {
+    position: fixed; inset: 0; z-index: 70;
+    margin: 0; border: none; border-radius: 0;
+    padding: 0 12px calc(24px + env(safe-area-inset-bottom));
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    background: var(--bg);
+  }
+  .card.fiche.ouverte .fiche-tete { display: none; }
+  .card.fiche.ouverte > h2 { display: none; }   /* la barre porte déjà le titre */
+  .fiche-barre { display: none; }
+  .card.fiche.ouverte .fiche-barre {
+    display: flex; align-items: center; gap: 10px;
+    position: sticky; top: 0; z-index: 5;
+    margin: 0 -12px 12px; padding: max(10px, env(safe-area-inset-top)) 10px 10px;
+    background: rgba(11,14,19,0.96); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .fiche-retour {
+    background: none; border: 1px solid var(--line); border-radius: 9px;
+    min-width: 40px; min-height: 36px; font-size: 20px; line-height: 1;
+    color: var(--or-clair); padding: 0;
+  }
+  .fiche-barre-titre {
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+    background-image: var(--gold-text-grad); background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  body.fiche-ouverte #tabbar { display: none; }   /* pleine page, plein écran */
+}

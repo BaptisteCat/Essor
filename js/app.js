@@ -357,6 +357,12 @@ const App = {
       UI.toast(`Données mises à jour depuis l'autre appareil${par}.`);
     };
     App.armerSondage();
+    // Les écrans se re-rendent d'eux-mêmes après une action : les fiches se
+    // reposent alors sans que chaque écran ait à y penser.
+    if (!App._obsFiches) {
+      App._obsFiches = new MutationObserver(U.debounce(() => { if (UI.estMobile()) UI.fiches(); }, 60));
+      App._obsFiches.observe(document.getElementById('content-inner'), { childList: true, subtree: true });
+    }
   },
 
   // À l'ouverture d'une session, le dépôt peut porter le travail d'un autre
@@ -444,6 +450,9 @@ const App = {
   },
 
   go(screen) {
+    // Changer d'onglet referme la fiche ouverte : chaque écran repart de sa liste.
+    UI._ficheOuverte = null;
+    document.body.classList.remove('fiche-ouverte');
     App.current = screen;
     Store.state.ui.lastScreen = screen;
     Store.markDirty();
@@ -528,6 +537,7 @@ const App = {
     const el = document.getElementById('content-inner');
     el.innerHTML = '';
     s.render();
+    if (UI.estMobile()) UI.fiches();
   },
 };
 
