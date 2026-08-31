@@ -6,7 +6,7 @@
    laissé au réseau, et le cache ne contient que des fichiers publics. */
 'use strict';
 
-const CACHE = 'essor-v9';
+const CACHE = 'essor-v11';
 
 const COQUILLE = [
   './', 'index.html', 'manifest.webmanifest',
@@ -14,7 +14,7 @@ const COQUILLE = [
   'icone-maskable-192.png', 'icone-maskable-512.png',
   'css/app.css',
   'js/util.js', 'js/zip.js', 'js/xlsx.js', 'js/crypto.js', 'js/github.js', 'js/store.js',
-  'js/engine.js', 'js/indices.js', 'js/roundup.js', 'js/importers.js', 'js/rules.js',
+  'js/engine.js', 'js/indices.js', 'js/roundup.js', 'js/cours.js', 'js/importers.js', 'js/rules.js',
   'js/alloc.js', 'js/fisc.js', 'js/project.js', 'js/charts.js', 'js/worldmap.js',
   'js/geomap.js', 'js/biometrie.js', 'js/install.js', 'js/ui.js', 'js/screen-patrimoine.js', 'js/screen-mois.js',
   'js/screen-budget.js', 'js/screen-operations.js', 'js/screen-reglages.js', 'js/app.js',

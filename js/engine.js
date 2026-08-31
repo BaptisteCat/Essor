@@ -89,7 +89,7 @@ const Engine = {
       if (snap && t.date <= snap.date) continue; // déjà compris dans l'instantané
       q += t.qtyDelta;
     }
-    return Math.round(q * 1e6) / 1e6;
+    return Math.round(q * 1e8) / 1e8;   // le satoshi compte : 8 décimales, pas 6
   },
 
   symbolsOf(accountId) {

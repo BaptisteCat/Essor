@@ -49,6 +49,7 @@ const waitSuite = setInterval(() => {
 <script src="js/biometrie.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/indices.js"></script>
+<script src="js/cours.js"></script>
 <script src="js/importers.js"></script>
 <script src="js/rules.js"></script>
 <script src="js/alloc.js"></script>
@@ -623,6 +624,71 @@ try {
       initial === 'password' && montre === 'text' && champ.type === 'password',
       `${initial} → ${montre} → ${champ.type}`);
     bac.remove();
+  }
+
+  /* ---- Cours crypto : récupérés d'eux-mêmes, et pour les bons actifs ---- */
+  {
+    const S = fresh();
+    S.accounts.push({ id: 'cr', name: 'Crypto', type: 'crypto', order: 0 });
+    S.accounts.push({ id: 'pea', name: 'PEA', type: 'pea', order: 1 });
+    S.positionSnapshots.push({ id: 's1', accountId: 'cr', symbol: 'BTC', date: '2026-08-01', qty: 0.08, source: 'saisie:cr:BTC' });
+    S.trades.push({ id: 't1', accountId: 'cr', symbol: 'ETH', date: '2026-08-01', qtyDelta: 2 });
+    S.trades.push({ id: 't2', accountId: 'cr', symbol: 'ZZZ', date: '2026-08-01', qtyDelta: 1 });
+    S.trades.push({ id: 't3', accountId: 'pea', symbol: 'DCAM.FR', date: '2026-08-01', qtyDelta: 10 });
+
+    check('Cours — seuls les actifs des comptes crypto sont concernés',
+      Cours.symbolesCrypto().sort().join(',') === 'BTC,ETH,ZZZ',
+      Cours.symbolesCrypto().join(','));
+
+    // Un actif arrivé par un import n'avait aucun identifiant, et restait donc
+    // muet à chaque mise à jour sans que rien ne le signale.
+    const poses = Cours.completerIdentifiants();
+    check('Cours — les identifiants manquants sont posés depuis la table connue',
+      poses === 2 && S.priceMeta.BTC.coingecko === 'bitcoin' &&
+      S.priceMeta.ETH.coingecko === 'ethereum' && S.priceMeta.ETH.name === 'Ethereum',
+      `${poses} posé(s)`);
+    check('Cours — un actif inconnu de la table est signalé, pas passé sous silence',
+      Cours.sansIdentifiant().join(',') === 'ZZZ');
+
+    // Le rythme : une fois par intervalle, et la bascule coupe net.
+    S.settings.coursDernierMaj = null;
+    check('Cours — sans mise à jour connue, il faut en faire une', Cours.aRafraichir() === true);
+    S.settings.coursDernierMaj = new Date(Date.now() - 30 * 60000).toISOString();
+    check('Cours — une mise à jour récente ne se refait pas', Cours.aRafraichir() === false);
+    S.settings.coursDernierMaj = new Date(Date.now() - 9 * 3600000).toISOString();
+    check("Cours — passé l'intervalle, elle se refait", Cours.aRafraichir() === true);
+    S.settings.coursAuto = false;
+    check('Cours — la bascule des Réglages coupe le rafraîchissement', Cours.aRafraichir() === false);
+    S.settings.coursAuto = true;
+
+    // La récupération elle-même, sur une réponse simulée : aucun appel réseau
+    // dans les tests, et le fournisseur n'a pas à être joignable pour les jouer.
+    const vraiFetch = window.fetch;
+    let urlDemandee = null;
+    window.fetch = async (u) => {
+      urlDemandee = u;
+      return { ok: true, status: 200, json: async () => ({ bitcoin: { eur: 67808 }, ethereum: { eur: 2115.88 } }) };
+    };
+    const r = await Cours.majCrypto();
+    window.fetch = vraiFetch;
+    const prixDe = (sym) => { const x = Engine.priceAt(sym, U.today()); return x && x.price; };
+    check('Cours — les cours reçus sont posés au jour du jour, en centimes',
+      r.n === 2 && prixDe('BTC') === 6780800 && prixDe('ETH') === 211588,
+      `${r.n} cours, BTC=${prixDe('BTC')}`);
+    const urlClaire = decodeURIComponent(String(urlDemandee));
+    check('Cours — seuls des identifiants sortent de la machine, jamais une quantité (EX-99)',
+      /ids=/.test(urlClaire) && urlClaire.includes('bitcoin') && /vs_currencies=eur/.test(urlClaire) &&
+      !/0\.08|qty|quantit/.test(urlClaire), urlClaire);
+    check("Cours — l'actif sans identifiant est rapporté à l'appelant",
+      r.sans.join(',') === 'ZZZ' && !!S.settings.coursDernierMaj);
+
+    // Fournisseur injoignable : ce n'est pas un incident, la valorisation tient.
+    window.fetch = async () => { throw new Error('réseau coupé'); };
+    const ko = await Cours.majCrypto();
+    window.fetch = vraiFetch;
+    check('Cours — hors ligne, la mise à jour échoue proprement sans rien casser',
+      ko.n === 0 && !!ko.erreur && prixDe('BTC') === 6780800,
+      ko.erreur);
   }
 
   /* ---- Portefeuille crypto : des actifs, des paires, une plus-value ---- */

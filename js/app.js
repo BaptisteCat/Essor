@@ -318,6 +318,16 @@ const App = {
     App.armerVerrouAuto();
     // Le navigateur se réserve d'effacer les données d'un site « de passage »
     // quand la place manque : on demande le statut durable dès l'ouverture.
+    // Les cours crypto se rafraîchissent d'eux-mêmes, au plus une fois par
+    // intervalle réglé. En silence : un cours qui n'arrive pas n'est pas un
+    // incident, la valorisation continue sur le dernier connu.
+    if (Cours.completerIdentifiants()) Store.markDirty();
+    Cours.onMaj = (r) => {
+      Engine.invalidate();
+      App.render();
+      UI.toast(`${r.n} cours crypto mis à jour.`);
+    };
+    Cours.majAuto();
     Install.rendreDurable();
     // L'installabilité peut n'être annoncée qu'après coup : l'écran Réglages
     // doit alors se remettre à jour tout seul.

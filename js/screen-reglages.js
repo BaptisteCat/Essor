@@ -648,11 +648,32 @@ const ScreenReglages = {
         <div class="hint">Rejouable sans risque : une opération déjà convertie ne l'est jamais deux fois.</div>
       </div>
       <div class="row" style="margin-top:10px">
-        <button id="rg-fetch-crypto">Mettre à jour les cours crypto (CoinGecko)</button>
+        <div class="row" style="align-items:center">
+          <button id="rg-fetch-crypto">Mettre à jour les cours crypto maintenant</button>
+          <div class="field" style="margin:0"><label>
+            <input type="checkbox" id="rg-cours-auto" style="width:auto"
+              ${S.settings.coursAuto === false ? '' : 'checked'}>
+            Mise à jour automatique à l'ouverture</label></div>
+          <div class="field" style="margin:0"><label>Pas plus d'une fois toutes les</label>
+            <select id="rg-cours-h">${[1, 3, 6, 12, 24].map(h =>
+              `<option value="${h}" ${(S.settings.coursIntervalleH || 6) === h ? 'selected' : ''}>${h} h</option>`).join('')}</select></div>
+        </div>
+        <div class="hint">Dernière mise à jour : ${U.escapeHtml(Cours.derniereMaj())}. Seuls les
+          identifiants d'actifs (« bitcoin », « ethereum ») sortent de la machine — jamais vos
+          quantités ni vos montants. Sans réseau, la valorisation garde le dernier cours connu.</div>
         <span class="hint">Les autres cours se saisissent manuellement ou via un relevé de courtier — l'application fonctionne entièrement hors ligne, la mise à jour des cours est la seule exception.</span>
       </div>`;
     holder.querySelectorAll('[data-sym]').forEach(b => b.onclick = () => ScreenReglages.symbolModal(b.dataset.sym));
     document.getElementById('rg-fetch-crypto').onclick = (e) => UI.busy(e.target, () => ScreenReglages.fetchCrypto());
+    document.getElementById('rg-cours-auto').onchange = (e) => {
+      S.settings.coursAuto = e.target.checked;
+      Store.markDirty();
+      UI.toast(e.target.checked ? "Les cours se mettront à jour à l'ouverture." : 'Mise à jour automatique désactivée.');
+    };
+    document.getElementById('rg-cours-h').onchange = (e) => {
+      S.settings.coursIntervalleH = Number(e.target.value);
+      Store.markDirty();
+    };
     // La clé déjà enregistrée est replacée dans le champ après rendu (un champ
     // secret ne porte pas sa valeur dans le HTML).
     const champFmp = document.getElementById('rg-fmp');
@@ -886,29 +907,20 @@ const ScreenReglages = {
 
   // Cours crypto via CoinGecko — seuls les identifiants de supports sortent (EX-99).
   async fetchCrypto() {
-    const S = Store.state;
-    const ids = [];
-    for (const [sym, meta] of Object.entries(S.priceMeta)) {
-      if (meta.coingecko) ids.push({ sym, id: meta.coingecko });
-    }
-    if (!ids.length) {
-      UI.error('Aucun support n\'a d\'identifiant CoinGecko.', 'Ouvrez « gérer » sur un support crypto et renseignez son identifiant (ex. « bitcoin »).');
+    const r = await Cours.majCrypto();
+    if (r.erreur) {
+      UI.error(`Mise à jour impossible : ${r.erreur}.`,
+        'Tout le reste fonctionne hors ligne, sur le dernier cours connu.');
       return;
     }
-    try {
-      const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.map(x => x.id).join(',')}&vs_currencies=eur`;
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`réponse ${r.status}`);
-      const data = await r.json();
-      let n = 0;
-      for (const { sym, id } of ids) {
-        if (data[id] && data[id].eur) { Engine.setPrice(sym, U.today(), U.roundCents(data[id].eur * 100)); n++; }
-      }
-      Engine.invalidate();
-      UI.toast(`${n} cours mis à jour.`);
-      ScreenReglages.renderSymbols();
-    } catch (e) {
-      UI.error(`Mise à jour impossible : ${e.message}.`, 'Vérifiez la connexion réseau — tout le reste fonctionne hors ligne.');
+    if (!r.total) {
+      UI.error('Aucun actif crypto détenu.',
+        'Déclarez vos actifs depuis Opérations → un compte crypto → Actifs.');
+      return;
     }
+    Engine.invalidate();
+    ScreenReglages.renderSymbols();
+    UI.toast(`${r.n} cours mis à jour.` +
+      (r.sans.length ? ` Identifiant inconnu, cours à saisir à la main : ${r.sans.map(U.escapeHtml).join(', ')}.` : ''));
   },
 };

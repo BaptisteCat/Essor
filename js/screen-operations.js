@@ -137,7 +137,11 @@ const ScreenOperations = {
       tr.querySelector('[data-x="edit"]').onclick = () => ScreenOperations.accountModal(id);
       tr.querySelector('[data-x="certify"]').onclick = () => ScreenOperations.certifyModal(id);
       const posBtn = tr.querySelector('[data-x="pos"]');
-      if (posBtn) posBtn.onclick = () => ScreenOperations.positionsModal(id);
+      // Un portefeuille crypto se tient en détentions, un compte-titres en
+      // mouvements : deux écrans, parce que ce sont deux façons de compter.
+      if (posBtn) posBtn.onclick = () => (Engine.account(id).type === 'crypto'
+        ? ScreenOperations.actifsModal(id)
+        : ScreenOperations.positionsModal(id));
     });
   },
 
@@ -251,17 +255,8 @@ const ScreenOperations = {
     };
   },
 
-  // Identifiants CoinGecko des actifs les plus courants : sans eux, « Mettre à
-  // jour les cours crypto » ne saurait pas quoi demander, et il faudrait aller
-  // les saisir un par un dans les Réglages.
-  CRYPTO_CONNUES: {
-    BTC: 'bitcoin', XBT: 'bitcoin', ETH: 'ethereum', SOL: 'solana', ADA: 'cardano',
-    DOT: 'polkadot', AVAX: 'avalanche-2', MATIC: 'matic-network', POL: 'polygon-ecosystem-token',
-    LINK: 'chainlink', XRP: 'ripple', LTC: 'litecoin', BCH: 'bitcoin-cash', DOGE: 'dogecoin',
-    ATOM: 'cosmos', ALGO: 'algorand', XTZ: 'tezos', NEAR: 'near', ARB: 'arbitrum',
-    OP: 'optimism', UNI: 'uniswap', AAVE: 'aave', TRX: 'tron', BNB: 'binancecoin',
-    USDT: 'tether', USDC: 'usd-coin', DAI: 'dai',
-  },
+  // Les identifiants CoinGecko vivent dans js/cours.js, avec ce qui s'en sert.
+  get CRYPTO_CONNUES() { return Cours.IDS; },
 
   // On saisit un ACTIF — BTC, ETH, BNB — pas une paire : la devise est celle du
   // prix, pas de l'actif. Une paire écrite par habitude (« BTC/EUR ») n'est
@@ -276,6 +271,207 @@ const ScreenOperations = {
   // Devises de saisie. Tout est valorisé en euros : une saisie faite dans une
   // autre monnaie est convertie à un taux que l'utilisateur voit et corrige.
   DEVISES: ['EUR', 'USD', 'USDT', 'USDC', 'GBP', 'CHF'],
+
+  /* ---------- Actifs crypto (EX-11, EX-12) ----------
+     Un compte crypto ne se tient pas en mouvements datés : on détient X BTC,
+     et c'est tout. La saisie est donc une DÉTENTION — actif, quantité, prix
+     moyen d'achat — et le patrimoine s'en déduit tout seul, au cours du jour
+     récupéré automatiquement. Techniquement, c'est un instantané de quantité
+     daté d'aujourd'hui (P2) : il rend caducs les mouvements antérieurs, ce qui
+     est précisément ce qu'on veut d'une déclaration de solde. */
+
+  actifsModal(accountId, edition) {
+    const a = Engine.account(accountId);
+    const today = U.today();
+    const v = Engine.positionsValue(accountId, today);
+    const qte = (q) => q.toLocaleString('fr-FR', { maximumFractionDigits: 8 });
+    const pct = (gain, investi) => `<span class="${gain > 0 ? 'up' : gain < 0 ? 'down' : 'neutral-c'} num">` +
+      `${gain >= 0 ? '+' : ''}${(gain / investi * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}&nbsp;%</span>`;
+
+    let totalInvesti = 0, totalValeur = 0, tousPru = true;
+    const rows = v.detail.filter(d => d.qty).map(d => {
+      const pru = Store.state.pru[d.symbol];
+      const investi = pru ? U.roundCents(d.qty * pru) : null;
+      const gain = investi != null ? d.value - investi : null;
+      if (investi != null) totalInvesti += investi; else tousPru = false;
+      totalValeur += d.value;
+      const meta = Store.state.priceMeta[d.symbol] || {};
+      return `<tr${edition === d.symbol ? ' class="selected"' : ''}>
+        <td><b>${U.escapeHtml(d.symbol)}</b>
+          ${meta.name ? `<div class="small">${U.escapeHtml(meta.name)}</div>` : ''}
+          ${!meta.coingecko ? '<div class="small"><span class="badge cuivre" title="cours à saisir à la main">cours non suivi</span></div>' : ''}
+          <div class="small seul-mobile">payé ${pru ? U.fmtPrice(pru) : '—'}</div></td>
+        <td class="num">${qte(d.qty)}</td>
+        <td class="num col-large">${d.price != null ? U.fmtPrice(d.price) : '—'}</td>
+        <td class="num col-large">${pru ? U.fmtPrice(pru) : '<span class="muted">—</span>'}</td>
+        <td class="num col-large">${investi != null ? U.fmtEUR(investi) : '—'}</td>
+        <td class="num">${gain != null ? UI.varia(gain) : '—'}
+          ${gain != null && investi ? `<div class="small seul-mobile">${pct(gain, investi)}</div>` : ''}</td>
+        <td class="num col-large">${gain != null && investi ? pct(gain, investi) : '—'}</td>
+        <td class="num stat-val">${U.fmtEUR(d.value)}</td>
+        <td class="num">
+          <button class="ghost" data-mod="${U.escapeHtml(d.symbol)}" title="Corriger">✎</button>
+          <button class="ghost" data-suppr="${U.escapeHtml(d.symbol)}" title="Retirer cet actif">✕</button></td></tr>`;
+    }).join('');
+
+    const gainTotal = tousPru && totalInvesti ? totalValeur - totalInvesti : null;
+    const enEdition = edition ? v.detail.find(d => d.symbol === edition) : null;
+    const pruEdition = enEdition ? Store.state.pru[enEdition.symbol] : null;
+
+    const m = UI.modal(`
+      <h2>Actifs — ${U.escapeHtml(a.name)}</h2>
+      <p class="small">Déclarez ce que vous détenez et ce que vous l'avez payé en moyenne :
+      la valeur et la plus ou moins-value suivent le cours, récupéré automatiquement.
+      <span class="muted">Cours mis à jour ${U.escapeHtml(Cours.derniereMaj())}.</span>
+      <button class="ghost" id="ac-maj" style="margin-left:6px">Actualiser</button></p>
+
+      ${rows ? `<div style="overflow-x:auto"><table>
+        <tr><th>Actif</th><th class="num">Quantité</th><th class="num col-large">Cours</th>
+          <th class="num col-large">Prix moyen</th><th class="num col-large">Investi</th>
+          <th class="num">± value</th><th class="num col-large">%</th>
+          <th class="num">Valeur</th><th></th></tr>
+        ${rows}
+        ${gainTotal != null ? `<tr class="section"><td>Total</td><td></td><td class="col-large"></td>
+          <td class="col-large"></td><td class="num col-large">${U.fmtEUR(totalInvesti)}</td>
+          <td class="num">${UI.varia(gainTotal)}
+            <div class="small seul-mobile">${pct(gainTotal, totalInvesti)}</div></td>
+          <td class="num col-large">${pct(gainTotal, totalInvesti)}</td>
+          <td class="num stat-val">${U.fmtEUR(totalValeur)}</td><td></td></tr>` : ''}
+      </table></div>` : '<div class="empty">Aucun actif déclaré.</div>'}
+      ${!tousPru && rows ? `<div class="notice">Sans prix moyen d'achat, la plus ou moins-value ne peut
+        pas être calculée — c'est la seule chose qu'Essor ne sait pas déduire.</div>` : ''}
+
+      <h3 style="margin-top:16px">${enEdition ? `Corriger ${U.escapeHtml(enEdition.symbol)}` : 'Déclarer un actif'}</h3>
+      <div class="row">
+        <div class="field"><label>Actif</label>
+          <input id="ac-sym" placeholder="BTC" size="10" autocapitalize="characters" spellcheck="false"
+            value="${enEdition ? U.escapeHtml(enEdition.symbol) : ''}" ${enEdition ? 'readonly' : ''}></div>
+        <div class="field"><label>Quantité détenue</label>
+          <input id="ac-qty" class="amount" size="14" placeholder="0,05"
+            value="${enEdition ? String(enEdition.qty).replace('.', ',') : ''}"></div>
+        <div class="field"><label>Prix moyen d'achat</label>
+          ${UI.amountInput('ac-pru', pruEdition || null, '47 500,00')}</div>
+        <div class="field"><label>Devise du prix</label>
+          <select id="ac-dev">${ScreenOperations.DEVISES.map(x =>
+            `<option ${x === 'EUR' ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <button class="primary" id="ac-ok">${enEdition ? 'Enregistrer' : 'Ajouter'}</button>
+        ${enEdition ? '<button class="ghost" id="ac-annuler">Abandonner</button>' : ''}
+      </div>
+      <div id="ac-change" style="display:none">
+        <div class="row" style="margin-top:6px">
+          <div class="field"><label>Taux au moment de l'achat</label>
+            <span class="num">1 <b id="ac-dev-nom">USD</b> =</span>
+            ${UI.amountInput('ac-taux', null, '0,92')} <span class="small">€</span></div>
+          <div class="field"><div class="hint" id="ac-apercu">&nbsp;</div></div>
+        </div>
+      </div>
+      <div class="hint">La quantité déclarée fait foi à compter d'aujourd'hui. Le cours du jour vient
+      de CoinGecko : seuls les identifiants d'actifs sortent de la machine, jamais vos quantités.</div>
+      <div class="erreur" id="ac-err"></div>
+      <div class="actions"><button class="ghost" data-x="cancel">Fermer</button></div>`);
+
+    m.el.querySelector('[data-x="cancel"]').onclick = m.close;
+    const rouvrir = (ed) => { m.close(); ScreenOperations.actifsModal(accountId, ed); };
+    const bAnnuler = m.el.querySelector('#ac-annuler');
+    if (bAnnuler) bAnnuler.onclick = () => rouvrir(null);
+
+    m.el.querySelector('#ac-maj').onclick = (e) => UI.busy(e.target, async () => {
+      const r = await Cours.majCrypto();
+      if (r.erreur) { UI.error(`Cours non mis à jour : ${r.erreur}.`, 'La valorisation garde le dernier cours connu.'); return; }
+      UI.toast(`${r.n} cours mis à jour.` +
+        (r.sans.length ? ` Cours à saisir à la main : ${r.sans.map(U.escapeHtml).join(', ')}.` : ''));
+      rouvrir(edition);
+    });
+
+    // La devise ne se demande que si elle sort de l'euro.
+    const selDev = m.el.querySelector('#ac-dev');
+    const majChange = () => {
+      const dev = selDev.value;
+      m.el.querySelector('#ac-change').style.display = dev === 'EUR' ? 'none' : 'block';
+      if (dev === 'EUR') return;
+      m.el.querySelector('#ac-dev-nom').textContent = dev;
+      const champ = m.el.querySelector('#ac-taux');
+      const memoire = (Store.state.settings.tauxChange || {})[dev];
+      if (!champ.value && memoire) champ.value = (memoire / 10000).toLocaleString('fr-FR');
+      const apercu = () => {
+        const taux = UI.readAmount(champ);
+        const pru = UI.readAmount(m.el.querySelector('#ac-pru'));
+        m.el.querySelector('#ac-apercu').innerHTML = taux && pru != null
+          ? `soit ${U.fmtEUR(U.roundCents(pru * taux / 10000))} le prix moyen`
+          : 'renseignez le taux pour voir le montant en euros';
+      };
+      champ.oninput = apercu;
+      m.el.querySelector('#ac-pru').oninput = apercu;
+      apercu();
+    };
+    selDev.onchange = majChange;
+    majChange();
+
+    m.el.querySelectorAll('[data-mod]').forEach(b => b.onclick = () => rouvrir(b.dataset.mod));
+
+    // Retirer un actif : l'instantané et les mouvements de ce support s'en
+    // vont ensemble, sinon la quantité reviendrait par la bande. Annulable.
+    m.el.querySelectorAll('[data-suppr]').forEach(b => b.onclick = () => {
+      const sym = b.dataset.suppr;
+      const snaps = Store.state.positionSnapshots.filter(s => s.accountId === accountId && s.symbol === sym);
+      const trades = Store.state.trades.filter(t => t.accountId === accountId && t.symbol === sym);
+      const pru = Store.state.pru[sym];
+      Store.state.positionSnapshots = Store.state.positionSnapshots.filter(s => !(s.accountId === accountId && s.symbol === sym));
+      Store.state.trades = Store.state.trades.filter(t => !(t.accountId === accountId && t.symbol === sym));
+      delete Store.state.pru[sym];
+      Engine.invalidate();
+      Store.markDirty();
+      rouvrir(edition === sym ? null : edition);
+      UI.toastAction(`${U.escapeHtml(sym)} retiré du portefeuille.`, 'Annuler',
+        () => {
+          Store.state.positionSnapshots.push(...snaps);
+          Store.state.trades.push(...trades);
+          if (pru) Store.state.pru[sym] = pru;
+          Engine.invalidate();
+          Store.markDirty();
+          document.querySelectorAll('.modal-back').forEach(x => x.remove());
+          ScreenOperations.actifsModal(accountId, edition);
+        });
+    });
+
+    m.el.querySelector('#ac-ok').onclick = () => {
+      const err = m.el.querySelector('#ac-err');
+      err.textContent = '';
+      const sym = ScreenOperations.lireActif(m.el.querySelector('#ac-sym').value);
+      const qty = Number(String(m.el.querySelector('#ac-qty').value).replace(/\s/g, '').replace(',', '.'));
+      let pru = UI.readAmount(m.el.querySelector('#ac-pru'));
+      if (!sym) { err.textContent = 'Indiquez l\'actif : BTC, ETH, SOL…'; return; }
+      if (!(qty > 0) || Number.isNaN(qty)) { err.textContent = 'Indiquez la quantité détenue, supérieure à zéro.'; return; }
+      const dev = selDev.value;
+      if (dev !== 'EUR' && pru != null) {
+        const taux = UI.readAmount(m.el.querySelector('#ac-taux'));
+        if (!taux) { err.textContent = `Indiquez combien vaut 1 ${dev} en euros : sans ce taux, la plus-value serait fausse.`; return; }
+        pru = U.roundCents(pru * taux / 10000);
+        Store.state.settings.tauxChange = { ...(Store.state.settings.tauxChange || {}), [dev]: taux };
+      }
+      // La détention déclarée remplace la précédente : un seul instantané de
+      // saisie par actif, daté d'aujourd'hui.
+      const source = `saisie:${accountId}:${sym}`;
+      Store.state.positionSnapshots = Store.state.positionSnapshots.filter(s => s.source !== source);
+      Store.state.positionSnapshots.push({ id: U.uid(), accountId, symbol: sym, date: U.today(), qty, source });
+      if (pru) Store.state.pru[sym] = pru;
+      const meta = Store.state.priceMeta[sym] || {};
+      const cg = Cours.IDS[sym];
+      if (cg && !meta.coingecko) {
+        Store.state.priceMeta[sym] = { ...meta, coingecko: cg, currency: 'EUR', name: meta.name || Cours.NOMS[cg] };
+      }
+      Engine.invalidate();
+      Store.markDirty();
+      m.close();
+      // Un actif tout juste déclaré n'a pas encore de cours : on va le chercher.
+      const inconnu = !Store.state.prices[sym] || !Object.keys(Store.state.prices[sym]).length;
+      if (inconnu && cg) {
+        Cours.majCrypto().then(() => ScreenOperations.actifsModal(accountId, null));
+      } else {
+        ScreenOperations.actifsModal(accountId, null);
+      }
+    };
+  },
 
   /* ---------- Positions et actifs (EX-11, EX-12) ---------- */
 
@@ -502,7 +698,7 @@ const ScreenOperations = {
           Store.state.settings.tauxChange = { ...(Store.state.settings.tauxChange || {}), [dev]: taux };
         }
         const meta = Store.state.priceMeta[sym] || {};
-        const cg = ScreenOperations.CRYPTO_CONNUES[sym];
+        const cg = Cours.IDS[sym];
         if (cg && !meta.coingecko) Store.state.priceMeta[sym] = { ...meta, coingecko: cg, currency: 'EUR' };
         // Premier achat sans prix de revient : le cours saisi en tient lieu.
         if (!pru && price && qty > 0 && !Store.state.pru[sym]) pru = price;
