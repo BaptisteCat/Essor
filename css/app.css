@@ -1,0 +1,647 @@
+/* Essor — thème sombre premium, palette de métaux précieux (EX-83).
+   Esthétique héritée d'ESSOR V1 (budget.html) :
+   OR vivant (dégradés animés) = valeurs principales et gains,
+   ARGENT = neutre et transferts, CUIVRE = négatif et alertes.
+   Vert/rouge réservés aux variations chiffrées. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0e13;
+  --bg2: #131721;          /* panneaux */
+  --bg3: #1a202c;          /* panneaux secondaires, champs */
+  --line: #232a37;
+  --row-alt: #171c26;
+  --texte: #e9edf4;
+  --texte-faible: #8b95a8;
+
+  --or: #f3c96b;
+  --or-clair: #f7d98c;
+  --or-pale: #ffe9ad;
+  --or-sombre: #a8822f;
+  --argent: #c7d2e0;
+  --argent-clair: #e8edf4;
+  --argent-sombre: #78828f;
+  --cuivre: #d2793f;
+  --cuivre-clair: #e8a06b;
+  --cuivre-sombre: #8a4523;
+  --vert: #45d68b;
+  --rouge: #f47070;
+
+  /* Textures or de référence (V1) */
+  --gold-text-grad: linear-gradient(to right, #bf953f, #fcf6ba, #b38728, #fbf5b7, #aa771c);
+  --gold-rich: linear-gradient(90deg, #893c15 0%, #ffde44 17%, #b1741e 24%, #ffe752 40%, #e09326 50%, #e4962a 59%, #b0781b 70%, #efb333 85%, #873a1a 100%);
+  --gold-grad: linear-gradient(115deg, #c69d3c 0%, #f7d98c 42%, #e2b754 72%, #f3cd74 100%);
+  --silver-text-grad: linear-gradient(to right, #8f9aa8, #ffffff, #a9b4c2, #e8edf4, #8f9aa8);
+
+  --shadow: 0 2px 6px rgba(0,0,0,0.35), 0 12px 32px rgba(0,0,0,0.22);
+  --radius: 14px;
+}
+
+@keyframes goldTextShine { to { background-position: 200% center; } }
+@keyframes goldMove {
+  0%   { background-size: 100%; background-position: 50%; }
+  50%  { background-size: 500%; background-position: 0%; }
+  100% { background-size: 200%; background-position: 100%; }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--texte);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Les chiffres s'alignent verticalement : chasse fixe (EX-85). */
+.num, td.num, .ch-tick, .ch-tip b, .kpi-val, .stat-val {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Texte en or vivant (V1) */
+.gold-text, .brand, .card h2, .kpi-val.num:not([style]) {
+  background-image: var(--gold-text-grad);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: goldTextShine 8s linear infinite;
+  width: fit-content;
+}
+.card h2 .small, .kpi-val .small {
+  -webkit-text-fill-color: var(--texte-faible);
+  background: none; animation: none;
+}
+
+h1, h2, h3 { font-weight: 600; color: var(--texte); }
+h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: 0.4px; }
+h2 { font-size: 12.5px; margin: 0 0 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; }
+h3 { font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .07em; color: var(--texte-faible); }
+
+a { color: var(--or-clair); }
+
+/* ---------- Structure ---------- */
+
+#app { display: flex; height: 100vh; }
+
+nav#sidebar {
+  width: 212px; flex: none;
+  background: #0d1119;
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  padding: 16px 12px;
+}
+.brand { font-size: 23px; font-weight: 700; letter-spacing: .06em; padding: 4px 10px 16px; }
+.brand small {
+  display: block; font-size: 9.5px; font-weight: 500; letter-spacing: .18em;
+  -webkit-text-fill-color: var(--texte-faible); background: none; animation: none;
+}
+
+.nav-item {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; margin: 2px 0;
+  border-radius: 9px; cursor: pointer;
+  color: var(--texte-faible); border: 1px solid transparent; background: none;
+  font: inherit; font-weight: 500; text-align: left; width: 100%;
+  transition: color 200ms ease, background 200ms ease;
+}
+.nav-item:hover { background: var(--bg3); color: var(--texte); }
+.nav-item.active { background: var(--bg3); color: var(--or-clair); font-weight: 600; }
+.nav-item.active::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 2px;
+  background: var(--gold-grad);
+  box-shadow: 0 0 10px rgba(243,201,107,0.55);
+}
+.nav-item .ico { width: 18px; text-align: center; }
+
+.nav-bottom { margin-top: auto; }
+
+main#content { flex: 1; overflow-y: auto; padding: 22px 28px 60px; }
+.screen { max-width: 1180px; margin: 0 auto; }
+
+/* Bandeau supérieur : période globale + état d'enregistrement. */
+#topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  max-width: 1180px; margin: 0 auto 18px; gap: 14px; min-height: 36px;
+}
+#topbar .title-zone { flex: 1; }
+
+/* ---------- Sélecteur de période (unique et global, EX-79) ---------- */
+#period-picker { display: flex; align-items: center; gap: 4px; }
+#period-picker:not(:empty) {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg3);
+  transition: border-color 200ms ease;
+}
+#period-picker:not(:empty):hover { border-color: rgba(243,201,107,0.4); }
+#period-picker select {
+  border: none; background: transparent; color: var(--texte);
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+#period-picker select option { background: #151a23; color: var(--texte); }
+#period-picker button { border: none; background: transparent; padding: 4px 8px; color: var(--texte-faible); }
+#period-picker button:hover { color: var(--or-clair); }
+
+/* ---------- Indicateur d'enregistrement (EX-93) ---------- */
+#save-status {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--texte-faible);
+  padding: 5px 12px; border-radius: 20px; background: var(--bg2);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+#save-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--argent-sombre); }
+#save-status.saved { background: rgba(69,214,139,0.12); color: #b8f0c5; border-color: rgba(69,214,139,0.25); }
+#save-status.saved .dot { background: var(--vert); box-shadow: 0 0 6px rgba(69,214,139,0.6); }
+#save-status.saving .dot, #save-status.dirty .dot { background: var(--or); animation: pulse 1s infinite; }
+#save-status.error {
+  background: rgba(210,121,63,0.28); color: var(--cuivre-clair);
+  border-color: rgba(210,121,63,0.55);
+}
+#save-status.error .dot { background: var(--cuivre); }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* Avertissement impossible à manquer (EX-94). */
+#persist-warning {
+  background: linear-gradient(90deg, var(--cuivre-sombre), var(--cuivre), var(--cuivre-sombre));
+  color: #16100b;
+  padding: 12px 20px; font-weight: 600; text-align: center;
+  position: sticky; top: 0; z-index: 50;
+  box-shadow: 0 4px 18px rgba(210,121,63,0.35);
+}
+#persist-warning button { margin-left: 12px; }
+
+/* ---------- Cartes, grilles ---------- */
+/* Espacement resserré : chaque écran est une longue page, quelques pixels
+   gagnés par bloc évitent beaucoup de défilement. */
+.card {
+  background: var(--bg2); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 16px 18px; margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.card h2 { margin-bottom: 10px; }
+.grid { display: grid; gap: 12px; align-items: start; }
+/* Colonnes adaptatives plutôt que points de rupture brutaux : les blocs se
+   remettent sur une ligne dès que la largeur le permet, au lieu de s'empiler
+   et d'allonger la page. */
+.grid.c2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+.grid.c3 { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+/* KPI : effet « hero » hérité de la V1 — halo doré discret sur fond nuit. */
+.card.kpi {
+  background:
+    radial-gradient(420px 180px at 14% -36%, rgba(243,201,107,0.12), transparent 60%),
+    linear-gradient(150deg, #161c29 0%, #10141d 100%);
+  border-radius: 14px;
+  padding: 14px 18px;
+}
+.kpi-label {
+  font-size: 11px; color: rgba(243,201,107,0.85);
+  text-transform: uppercase; letter-spacing: 1.1px; margin-bottom: 3px;
+}
+.kpi-val { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; margin: 0; color: var(--texte); }
+.kpi-val.neutral { color: var(--argent-clair); }
+.kpi-sub { font-size: 12px; color: var(--texte-faible); }
+
+.stat-val { font-size: 17px; font-weight: 600; }
+
+/* Variations chiffrées : vert / rouge, seule entorse tolérée (EX-83). */
+.up { color: var(--vert); }
+.down { color: var(--rouge); }
+.neutral-c { color: var(--argent); }
+
+/* ---------- Tableaux ---------- */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--texte-faible); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover td, tr:hover td { background: var(--row-alt); }
+tr.section td {
+  background: var(--bg3); font-weight: 700; color: var(--texte);
+  border-top: 1px solid var(--line);
+}
+tr.section:hover td { background: #202737; }
+.small { font-size: 12px; color: var(--texte-faible); }
+
+/* ---------- Badges (pastilles V1) ---------- */
+.badge {
+  display: inline-block; font-size: 10.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 10px;
+  border: none; color: var(--texte-faible); background: rgba(120,130,143,0.18);
+  white-space: nowrap;
+}
+.badge.or { color: var(--or-clair); background: rgba(243,201,107,0.14); }
+.badge.argent { color: var(--argent); background: rgba(199,210,224,0.14); }
+.badge.cuivre { color: var(--cuivre-clair); background: rgba(210,121,63,0.20); }
+.badge.guess { color: var(--cuivre-clair); background: rgba(210,121,63,0.14); font-style: italic; }
+
+/* ---------- Formulaires ---------- */
+input, select, button, textarea {
+  background: var(--bg3); color: var(--texte);
+  border: 1px solid var(--line); border-radius: 7px;
+  padding: 6px 10px; font: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: rgba(243,201,107,0.55); }
+input[type="number"], input.amount { text-align: right; font-variant-numeric: tabular-nums; }
+input:invalid { border-color: var(--cuivre); }
+input[type="checkbox"] { accent-color: var(--or); }
+select option { background: #151a23; color: var(--texte); }
+label { font-size: 12px; color: var(--texte-faible); display: block; margin-bottom: 3px; }
+.field { margin-bottom: 12px; }
+.row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.row .field { margin-bottom: 0; }
+
+/* Boutons : sobres par défaut, l'or n'apparaît qu'au survol (V1 secondary). */
+button {
+  cursor: pointer;
+  transition: border-color 200ms ease, color 200ms ease, background 200ms ease;
+}
+button:hover { background: var(--bg3); border-color: rgba(243,201,107,0.45); color: var(--or-pale); }
+
+/* Bouton principal : cadre en or vivant, cœur sombre (V1 .gold-btn). */
+button.primary {
+  position: relative;
+  border: none; border-radius: 9px;
+  padding: 8px 16px;
+  font-weight: 700; letter-spacing: 0.3px;
+  color: var(--or-pale);
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  background: var(--gold-rich);
+  background-size: 100%;
+  z-index: 1;
+  transition: transform 300ms ease;
+}
+button.primary::before {
+  content: ""; position: absolute; inset: 2px; border-radius: 7px;
+  background: #10141d; z-index: -1;
+}
+button.primary:hover { transform: scale(1.03); animation: goldMove 5s infinite alternate ease-in-out; color: var(--or-pale); }
+button.primary:active { animation: goldMove 1s infinite alternate ease-in-out; }
+
+button.danger { background: transparent; border-color: rgba(210,121,63,0.55); color: var(--cuivre-clair); }
+button.danger:hover { background: var(--cuivre); border-color: var(--cuivre); color: #16100b; }
+button.ghost { background: none; border-color: transparent; color: var(--texte-faible); }
+button.ghost:hover { color: var(--or-pale); border-color: var(--line); background: var(--bg3); }
+button:disabled { opacity: .45; cursor: default; transform: none !important; animation: none !important; }
+button.busy { position: relative; color: transparent !important; text-shadow: none; }
+button.busy::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid rgba(243,201,107,0.9); border-top-color: transparent;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Graphiques ---------- */
+.ch-tick { font-size: 10.5px; fill: var(--texte-faible); }
+.ch-legend { display: flex; gap: 18px; margin-bottom: 6px; flex-wrap: wrap; font-size: 12px; color: var(--texte-faible); }
+.ch-leg { display: inline-flex; align-items: center; gap: 6px; }
+.ch-leg i, .ch-tip i, .donut-leg i {
+  width: 20px; height: 5px; border-radius: 3px; display: inline-block;
+  box-shadow: 0 0 6px rgba(255,255,255,0.15), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.chart-holder { position: relative; }
+.ch-tip {
+  position: absolute; pointer-events: none; z-index: 10;
+  background: #1e2534; border: 1px solid #2d3546; border-radius: 8px;
+  padding: 8px 12px; font-size: 12px; line-height: 1.6;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.28); white-space: nowrap;
+}
+.ch-tip .ch-tip-t { font-weight: 600; color: var(--argent-clair); margin-bottom: 3px; }
+.ch-tip i { margin-right: 6px; width: 10px; height: 10px; border-radius: 2px; box-shadow: none; }
+.ch-tip b { margin-left: 4px; }
+.ch-real { color: var(--texte-faible); }
+
+.donut-wrap { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
+.donut-svg { flex: none; display: block; overflow: visible; }
+.donut-legs { flex: 1; min-width: 220px; }
+.donut-leg { display: flex; align-items: center; gap: 9px; padding: 3px 0; font-size: 13px; }
+/* Pastilles de légende : même aplat que les arcs. */
+.donut-leg i { width: 11px; height: 11px; border-radius: 50%; box-shadow: none; }
+.dl-name { flex: 1; }
+.dl-val { color: var(--argent-clair); }
+.dl-pct { width: 48px; text-align: right; color: var(--texte-faible); }
+
+/* ---------- Planisphère de l'exposition ---------- */
+:root {
+  --carte-vide: #1b2230;      /* terres sans exposition */
+  --carte-forte: #026cd4;     /* exposition maximale */
+  --carte-trait: #0e1420;     /* frontières */
+}
+/* minmax(0,…) : sans lui, la largeur minimale des barres du détail pousse la
+   colonne de droite et la carte perd le tiers qu'on lui a promis. */
+.geo-layout {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px; align-items: start;
+}
+.geo-cote { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* Sous 900 px, deux colonnes rendraient la carte illisible : on empile. */
+@media (max-width: 900px) { .geo-layout { grid-template-columns: 1fr; } }
+/* Dans la colonne étroite : disque et légende empilés, barres compactées. */
+.geo-cote .donut-wrap { flex-direction: column; align-items: flex-start; gap: 8px; }
+.geo-cote .donut-legs { min-width: 0; width: 100%; }
+.geo-cote .bar-name { width: 92px; }
+.geo-cote .bar-val { display: none; }
+.geo-cote .bar-row { gap: 8px; }
+
+.carte-wrap { position: relative; margin: 4px 0 8px; }
+/* Silhouette des continents : elle situe le regard, elle ne concurrence
+   jamais les disques — c'est eux qui portent l'information. */
+.carte-fond path { fill: #1a2130; stroke: none; }
+/* Bascule vue d'ensemble ↔ vue rapprochée. Le mouvement dure assez pour
+   qu'on suive des yeux le passage des bulles aux pays, pas plus. */
+.carte-zoom { transition: transform 420ms cubic-bezier(.4, 0, .2, 1); }
+.carte-bulles { transition: opacity 220ms ease; }
+.carte-bulles.efface { opacity: 0; pointer-events: none; }
+.carte-details .carte-detail { opacity: 0; pointer-events: none; transition: opacity 260ms ease; }
+.carte-details .carte-detail.visible { opacity: 1; pointer-events: auto; }
+/* Le groupe étant agrandi de k, les étiquettes sont divisées d'autant pour
+   garder une taille constante à l'écran. */
+.carte-detail-part {
+  fill: #fff; font-weight: 700; text-anchor: middle;
+  font-size: calc(15px / var(--zoom-k, 1));
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke; stroke: rgba(0,0,0,.5);
+  stroke-width: calc(3px / var(--zoom-k, 1));
+  pointer-events: none;
+}
+.carte-retour {
+  position: absolute; left: 10px; top: 8px;
+  background: rgba(19,23,33,.86); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 12px; font-size: 12.5px; color: var(--texte);
+  pointer-events: none;
+}
+
+/* Une part reliée à la carte se signale : sans cela, rien n'indique qu'elle
+   commande quelque chose. */
+.donut-leg.part-liee { cursor: pointer; border-radius: 6px; transition: background 140ms ease; }
+.donut-leg.part-liee:hover { background: rgba(255,255,255,.05); }
+.donut-svg [data-part] { cursor: pointer; transition: opacity 140ms ease; }
+.donut-svg [data-part]:hover { opacity: .78; }
+
+.carte-disque { cursor: default; }
+.carte-disque circle { transition: opacity 120ms ease; }
+.carte-disque:hover circle { opacity: .82; }
+.carte-nom {
+  fill: #fff; font-size: 15px; font-weight: 600; text-anchor: middle;
+  paint-order: stroke; stroke: rgba(0,0,0,.45); stroke-width: 3px;
+  pointer-events: none;
+}
+.carte-part {
+  fill: #fff; font-size: 17px; font-weight: 700; text-anchor: middle;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke; stroke: rgba(0,0,0,.45); stroke-width: 3px;
+  pointer-events: none;
+}
+.carte-wrap svg { display: block; width: 100%; height: auto; }
+.pays-actif { cursor: crosshair; transition: filter 120ms ease; }
+.pays-actif:hover { filter: brightness(1.45); stroke: var(--or); stroke-width: 0.9; }
+.carte-etiq text {
+  font-size: 11px; font-weight: 700; fill: #fff; paint-order: stroke;
+  stroke: rgba(0,0,0,.65); stroke-width: 3px; stroke-linejoin: round;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.carte-tip {
+  position: absolute; pointer-events: none; z-index: 10;
+  background: #1e2534; border: 1px solid #2d3546; border-radius: 8px;
+  padding: 7px 11px; font-size: 12px; line-height: 1.5;
+  box-shadow: 0 4px 14px rgba(0,0,0,.4); white-space: nowrap;
+}
+.carte-legende { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.carte-cle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--texte-faible); }
+.carte-cle i {
+  width: 13px; height: 13px; border-radius: 3px; display: inline-block;
+  border: 1px solid rgba(255,255,255,.12);
+}
+
+/* ---------- Barres horizontales de répartition ---------- */
+.bars { display: flex; flex-direction: column; gap: 9px; }
+.bar-row { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.bar-name { width: 160px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { flex: 1; height: 15px; background: #1d2331; border-radius: 8px; overflow: hidden; min-width: 60px; }
+.bar-fill { display: block; height: 100%; border-radius: 8px; }
+.bar-pct { width: 46px; text-align: right; color: var(--texte); font-weight: 600; }
+.bar-val { width: 100px; text-align: right; color: var(--texte-faible); }
+@media (max-width: 700px) { .bar-name { width: 110px; } .bar-val { display: none; } }
+
+/* ---------- Jauges budget ---------- */
+.gauge { position: relative; height: 6px; background: #232936; border-radius: 3px; overflow: hidden; min-width: 90px; }
+.gauge-fill { height: 100%; background: var(--gold-grad); border-radius: 3px; transition: width 0.3s; }
+.gauge-fill.over { background: var(--cuivre); }
+.gauge-mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--argent-clair); }
+
+/* ---------- Modales ---------- */
+.modal-back {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+  padding: 24px;
+}
+.modal {
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 12px;
+  max-width: 720px; width: calc(100% - 40px); max-height: 86vh; overflow-y: auto;
+  padding: 20px 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.modal h2 {
+  margin-top: 0; font-size: 15px; text-transform: none; letter-spacing: 0.2px;
+  color: var(--texte);
+}
+.modal .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+/* ---------- Zone de dépôt (glisser-déposer des relevés) ---------- */
+.dropzone { position: relative; transition: outline-color 180ms ease, background 180ms ease; }
+.dropzone .drop-hint {
+  font-size: 12px; color: var(--texte-faible); font-style: italic;
+  border: 1px dashed var(--line); border-radius: 9px;
+  padding: 8px 12px; margin-bottom: 12px;
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+}
+.dropzone:hover .drop-hint { border-color: rgba(243,201,107,0.4); }
+.dropzone.drop-active {
+  outline: 2px dashed var(--or);
+  outline-offset: -6px;
+  background: rgba(243,201,107,0.06);
+}
+.dropzone.drop-active .drop-hint {
+  border-color: var(--or); color: var(--or-pale);
+  background: rgba(243,201,107,0.10); font-style: normal; font-weight: 600;
+}
+.dropzone.drop-active * { pointer-events: none; }
+
+/* ---------- Divers ---------- */
+.empty { color: var(--texte-faible); font-style: italic; padding: 18px 4px; }
+.muted { color: var(--texte-faible); }
+.spacer { flex: 1; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.right { text-align: right; }
+.clickable { cursor: pointer; }
+.drag-handle { cursor: grab; color: var(--texte-faible); user-select: none; }
+.hint { font-size: 12px; color: var(--texte-faible); font-style: italic; }
+.notice {
+  border-left: 4px solid var(--argent);
+  background: linear-gradient(135deg, rgba(199,210,224,0.11) 0%, rgba(199,210,224,0.03) 100%);
+  padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13px;
+}
+.notice.warn {
+  border-color: var(--cuivre);
+  background: linear-gradient(135deg, rgba(210,121,63,0.13) 0%, rgba(210,121,63,0.03) 100%);
+}
+.notice.gold {
+  border-color: var(--or);
+  background: linear-gradient(135deg, rgba(243,201,107,0.11) 0%, rgba(243,201,107,0.03) 100%);
+}
+
+.toast-zone { position: fixed; bottom: 24px; right: 24px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  background: #242c3c; border: 1px solid #313b4d; border-left: 3px solid var(--or);
+  border-radius: 8px; padding: 12px 18px; max-width: 380px; font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45); animation: slidein .3s ease-out;
+}
+.toast.error { background: #4d2323; border-color: #6b3030; border-left-color: var(--cuivre); }
+@keyframes slidein { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* Écran d'accueil (choix du dossier de données). */
+#boot {
+  height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px;
+  text-align: center; padding: 20px;
+  background:
+    radial-gradient(900px 400px at 50% -10%, rgba(243,201,107,0.08), transparent 60%),
+    var(--bg);
+}
+#boot .brand { font-size: 44px; padding: 0; }
+#boot p { max-width: 520px; color: var(--texte-faible); }
+
+tr.selected td { background: rgba(243,201,107,0.07); }
+.checkbox-cell { width: 30px; text-align: center; }
+.checkbox-cell input { transform: scale(1.15); cursor: pointer; }
+
+::selection { background: rgba(243,201,107,0.3); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2a3140; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #333c4f; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================
+   Version web : coffre, barre du bas, téléphone
+   ============================================================ */
+
+/* ---------- Écran du coffre (création, déverrouillage) ---------- */
+
+#boot {
+  height: auto; min-height: 100dvh;
+  align-items: center; justify-content: center;
+  overflow-y: auto;
+  padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
+}
+#boot .brand { font-size: 40px; margin: 0 auto; }
+.boot-carte {
+  width: 100%; max-width: 460px; text-align: left;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 26px 26px 30px;
+}
+.boot-carte.large { max-width: 620px; }
+.boot-carte .brand { text-align: center; margin-bottom: 14px; }
+.boot-carte p { max-width: none; margin: 0 0 14px; }
+.boot-carte h3 { margin-top: 18px; }
+.boot-carte form { display: flex; flex-direction: column; gap: 10px; }
+.boot-carte input[type="password"], .boot-carte input[type="text"], .boot-carte input[type="file"] { width: 100%; padding: 10px 12px; }
+.boot-carte label { margin-top: 6px; }
+.boot-carte label input { width: 100%; }
+.boot-carte button.primary { padding: 10px 16px; margin-top: 4px; }
+.boot-carte .hint { margin-top: 12px; }
+.boot-carte code { background: var(--bg3); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+.erreur { color: var(--cuivre-clair); font-size: 12.5px; min-height: 1em; }
+button.lien {
+  background: none; border: none; padding: 0; color: var(--or-clair);
+  text-decoration: underline; font: inherit; font-style: italic; cursor: pointer;
+}
+button.lien:hover { background: none; border: none; }
+
+/* Qualité de la phrase de passe : une barre, pas un sermon. */
+.jauge { font-size: 11.5px; color: var(--texte-faible); display: flex; align-items: center; gap: 8px; }
+.jauge .j { display: block; height: 4px; width: 90px; border-radius: 2px; background: var(--bg3); }
+.jauge .j0 { background: linear-gradient(90deg, var(--cuivre) 12%, var(--bg3) 12%); }
+.jauge .j1 { background: linear-gradient(90deg, var(--cuivre) 30%, var(--bg3) 30%); }
+.jauge .j2 { background: linear-gradient(90deg, var(--or-sombre) 55%, var(--bg3) 55%); }
+.jauge .j3 { background: linear-gradient(90deg, var(--or) 78%, var(--bg3) 78%); }
+.jauge .j4 { background: var(--gold-grad); }
+
+.choix { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; }
+.carte-choix {
+  display: block; text-align: left; width: 100%; padding: 12px 14px;
+  background: var(--bg3); border: 1px solid var(--line); border-radius: 10px;
+}
+.carte-choix b { display: block; color: var(--texte); margin-bottom: 2px; }
+.carte-choix span { font-size: 12px; color: var(--texte-faible); }
+.carte-choix.actif { border-color: rgba(243,201,107,0.55); }
+.carte-choix.actif b { color: var(--or-clair); }
+
+.grille2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grille2 input { width: 100%; }
+
+/* ---------- Barre du bas (téléphone) ---------- */
+
+#tabbar { display: none; }
+
+/* ---------- Téléphone et petites fenêtres ---------- */
+
+#app { height: 100dvh; }
+
+@media (max-width: 820px) {
+  nav#sidebar { display: none; }
+
+  #app { flex-direction: column; }
+  main#content {
+    padding: 12px 12px calc(72px + env(safe-area-inset-bottom));
+    padding-top: max(12px, env(safe-area-inset-top));
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Le bandeau supérieur passe sur deux lignes plutôt que de se comprimer. */
+  #topbar { flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  #topbar .title-zone { flex-basis: 100%; }
+  #save-status { font-size: 11px; padding: 4px 10px; }
+  h1 { font-size: 18px; }
+
+  /* Un tableau large défile dans sa carte plutôt que d'élargir la page. */
+  .card { padding: 12px 12px; overflow-x: auto; }
+  .grid.c2, .grid.c3 { grid-template-columns: 1fr; }
+  .grille2 { grid-template-columns: 1fr; }
+  table { font-size: 12.5px; }
+  th, td { padding: 6px 7px; }
+  .toast-zone { left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .toast { max-width: none; }
+  .modal { max-height: 82dvh; overflow-y: auto; }
+
+  /* Cibles tactiles : 44 px, sans quoi rien n'est cliquable au pouce. */
+  button, select { min-height: 38px; }
+  input, select, textarea { font-size: 16px; }   /* évite le zoom automatique d'iOS */
+  input.amount, input[type="number"] { font-size: 15px; }
+
+  #tabbar {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    background: rgba(13,17,25,0.96);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #tabbar .nav-item {
+    flex: 1; flex-direction: column; gap: 2px; margin: 0; padding: 7px 2px 6px;
+    border-radius: 0; font-size: 10px; letter-spacing: .01em; text-align: center;
+  }
+  #tabbar .nav-item .ico { width: auto; font-size: 16px; }
+  #tabbar .nav-item.active { background: none; }
+  #tabbar .nav-item.active::before {
+    top: 0; bottom: auto; left: 18%; right: 18%; width: auto; height: 2px;
+  }
+  #tabbar .nav-item .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+}
+
+/* Fenêtre très étroite : les étiquettes des onglets gênent plus qu'elles n'aident. */
+@media (max-width: 380px) {
+  #tabbar .nav-item .lbl { font-size: 9px; }
+}

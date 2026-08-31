@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Essor — tests d'acceptation</title>
+<style>
+  body { background:#0b0e13; color:#e9edf4; font:14px/1.6 "Segoe UI",sans-serif; padding:24px; }
+  .ok { color:#4caf7d; } .ko { color:#e05c5c; font-weight:600; }
+  h1 { color:#d4af37; } pre { color:#8a919b; }
+</style>
+</head>
+<body>
+<h1>Essor — tests d'acceptation (section 9 du cahier des charges)</h1>
+<!-- v13 : dossier de données déplaçable, garde-fou multi-appareils -->
+
+<!-- v2 : + PEA -->
+<script>
+// Test additionnel : le PEA se comporte en enveloppe d'épargne (EX-43) et en
+// compte à positions ; les hypothèses migrent sur des données anciennes (EX-106).
+const waitSuite = setInterval(() => {
+  if (!/^(OK|ÉCHECS)/.test(document.title)) return; // la suite principale n'est pas finie
+  clearInterval(waitSuite);
+  const out = document.getElementById('out');
+  const S = Store.state = Store.defaultState();
+  Store.mode = 'local'; Store.markDirty = () => {};
+  const okType = ACCOUNT_TYPES.pea && ACCOUNT_TYPES.pea.positions && ACCOUNT_TYPES.pea.invest;
+  const old = { schema: 1, settings: { returns: { courant: 0 }, vols: {} }, accounts: [], transactions: [] };
+  const migrated = Store.migrate(old);
+  const okMig = migrated.settings.returns.pea === 0.045 && migrated.settings.vols.pea === 0.15;
+  Store.state = Store.defaultState();
+  Store.state.accounts.push({ id: 'p', name: 'PEA', type: 'pea', order: 0 });
+  Store.state.transactions.push({ id: 'v', accountId: 'p', date: '2026-01-10', amount: 50000, label: 'VERSEMENT', hash: 'v' });
+  Rules.detectTransfers();
+  const okInternal = Store.state.transactions[0].internal === true;
+  const all = okType && okMig && okInternal;
+  out.insertAdjacentHTML('beforeend',
+    `<div class="${all ? 'ok' : 'ko'}">${all ? '✔' : '✘'} PEA — nature à positions, hypothèses migrées, versements neutres (EX-43)` +
+    (all ? '' : `<pre>type:${okType} mig:${okMig} internal:${okInternal}</pre>`) + `</div>`);
+}, 150);
+</script>
+<div id="out">Exécution…</div>
+
+<script src="js/util.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/crypto.js"></script>
+<script src="js/github.js"></script>
+<script src="js/store.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/indices.js"></script>
+<script src="js/importers.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/alloc.js"></script>
+<script src="js/fisc.js"></script>
+<script src="js/project.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/worldmap.js"></script>
+<script src="js/geomap.js"></script>
+<script src="js/screen-reglages.js"></script>
+<script src="js/screen-budget.js"></script>
+<script src="js/screen-patrimoine.js"></script>
+<script src="js/screen-mois.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/screen-operations.js"></script>
+<script>
+'use strict';
+const results = [];
+function check(name, cond, detail) {
+  results.push({ name, ok: !!cond, detail: detail || '' });
+}
+
+/* ---- Palette des répartitions : ordre fixe, jamais de teinte engendrée ---- */
+{
+  check('Palette — ordre fixe : la 3ᵉ part garde sa couleur quel que soit le nombre de parts',
+    Charts.categoricalPalette(3).join() === Charts.CATEGORICAL.slice(0, 3).join() &&
+    Charts.categoricalPalette(6)[2] === Charts.CATEGORICAL[2]);
+  const n = Charts.CATEGORICAL.length;
+  const trop = Array.from({ length: n + 5 }, (_, i) => ({ label: 'c' + i, value: 100 - i }));
+  const plie = Charts.foldExtras(trop);
+  const colors = Charts.colorsFor(plie);
+  check('Palette — le surplus est regroupé sous « Autres », en gris, sans inventer de teinte',
+    plie.length === n && /^Autres/.test(plie[n - 1].label) &&
+    plie[n - 1].value === U.sum(trop.slice(n - 1), x => x.value) &&
+    colors[n - 1] === Charts.AUTRES &&
+    new Set(colors).size === colors.length,
+    JSON.stringify(plie.map(p => p.label)) + ' / ' + colors.join(','));
+}
+function fresh() {
+  Store.state = Store.defaultState();
+  Store.mode = 'local';
+  Store.markDirty = () => {};
+  return Store.state;
+}
+
+(async () => {
+try {
+
+/* ---- EX-77 : aucun montant ne s'affiche avec des centimes fractionnaires ---- */
+{
+  check('EX-77 — un montant fractionnaire est ramené au centime à l\'affichage',
+    U.fmtEUR(59911.400000000016) === '599,11 €' &&
+    U.fmtEUR(29.599999999983993) === '0,30 €' &&
+    U.fmtEUR(-1234.5) === '-12,35 €' &&
+    !/\d\.\d/.test(U.fmtEUR(59911.4000000001)),
+    `${U.fmtEUR(59911.400000000016)} / ${U.fmtEUR(29.599999999983993)}`);
+  // Un cours d'ETF a des décimales sous le centime ; le montant d'un ordre non.
+  const buys = Alloc.fitShares(60000, [
+    { symbol: 'A', price: 622.2, weight: 1 },
+    { symbol: 'B', price: 17384, weight: 1 },
+    { symbol: 'C', price: 3531, weight: 1 },
+  ]);
+  const coutTotal = U.sum(buys, b => b.cost);
+  check('EX-77 — un cours à décimales ne produit jamais un montant d\'ordre fractionnaire',
+    buys.every(b => Number.isInteger(b.cost) && Number.isInteger(b.shares)) &&
+    buys.every(b => b.cost === U.roundCents(b.shares * b.price)) &&
+    coutTotal <= 60000,
+    JSON.stringify(buys));
+}
+
+/* ---- Critère 1 + EX-77 : capitalisation 10 %/an sur 12 mois, écart nul ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'titres', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: U.today(), balance: 1000000 }); // 10 000 €
+  S.settings.returns.titres = 0.10;
+  S.settings.vols.titres = 0;
+  S.settings.inflation = 0;
+  S.budget.savings = [];
+  const p = Projection.run(12);
+  const attendu = 1100000; // 10 000 € × 1,10 exactement
+  check('C1 — capitalisation 10 %/an sur 12 mois exacte au centime',
+    p.central[12] === attendu, `obtenu ${p.central[12]}, attendu ${attendu}`);
+}
+
+/* ---- Projection : dispersion honnête, Monte Carlo, frais, objectifs, rente ---- */
+{
+  // D1 : partir de 100 % liquidités avec une épargne vers le PEA doit faire
+  // NAÎTRE de la dispersion — l'ancienne version, figée au jour 0, affichait
+  // un risque nul pour toujours.
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.accounts.push({ id: 'pea', name: 'PEA', type: 'pea', order: 1 });
+  S.certifications.push({ id: 'c1', accountId: 'cc', date: U.today(), balance: 1000000 });
+  S.certifications.push({ id: 'c2', accountId: 'pea', date: U.today(), balance: 0 });
+  S.targets.push({ accountId: 'pea', share: 1 });
+  S.budget.savings.push({ id: 's', name: 'ep', amount: 50000, accountId: 'pea' });
+  const p = Projection.run(60);
+  const largeur = (i) => p.band.high[i] - p.band.low[i];
+  check('D1 — la dispersion naît des versements vers le volatil, même en partant de liquidités',
+    largeur(60) > 0 && largeur(12) < largeur(60), `largeur 12 mois ${largeur(12)}, 60 mois ${largeur(60)}`);
+  check('Projection — quantiles ordonnés : P10 ≤ P25 ≤ centrale ≤ P75 ≤ P90',
+    p.band.low[60] <= p.low[60] && p.low[60] <= p.central[60] &&
+    p.central[60] <= p.high[60] && p.high[60] <= p.band.high[60]);
+
+  // Monte Carlo : reproductible, ordonné, médiane collée à la centrale.
+  const mc1 = Projection.monteCarlo(36), mc2 = Projection.monteCarlo(36);
+  check('MC — reproductible : deux exécutions, mêmes trajectoires (graine fixe)',
+    JSON.stringify(mc1.p50) === JSON.stringify(mc2.p50) &&
+    JSON.stringify(mc1.p10) === JSON.stringify(mc2.p10));
+  check('MC — percentiles ordonnés à l\'horizon',
+    mc1.p10[36] <= mc1.p25[36] && mc1.p25[36] <= mc1.p50[36] &&
+    mc1.p50[36] <= mc1.p75[36] && mc1.p75[36] <= mc1.p90[36] && mc1.p10[36] < mc1.p90[36]);
+  check('MC — la médiane simulée colle à la trajectoire centrale (rendement = taux médian)',
+    Math.abs(mc1.p50[36] - mc1.central[36]) / mc1.central[36] < 0.05,
+    `p50 ${mc1.p50[36]} vs centrale ${mc1.central[36]}`);
+}
+{
+  // D2 : 100 % crypto (σ = 60 %) — le prudent doit rester un quantile
+  // plausible, plus une capitalisation à −30 %/an pendant dix ans.
+  const S = fresh();
+  S.accounts.push({ id: 'k', name: 'K', type: 'crypto', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'k', date: U.today(), balance: 1000000 });
+  S.budget.savings = [];
+  const p = Projection.run(120);
+  check('D2 — scénarios crypto : quantiles plausibles, plus de caricature ±30 %/an composés',
+    p.low[120] / p.central[120] > 0.15 && p.high[120] / p.central[120] < 10,
+    `prudent/centrale = ${(p.low[120] / p.central[120]).toFixed(3)}`);
+}
+{
+  // Frais annuels déduits du rendement (4,5 % − 2 % = 2,5 %).
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'titres', order: 0, feesRate: 0.02 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: U.today(), balance: 1000000 });
+  S.settings.returns.titres = 0.045;
+  S.settings.vols.titres = 0;
+  S.settings.inflation = 0;
+  S.budget.savings = [];
+  const p = Projection.run(12);
+  check('Frais — les frais annuels du compte sont déduits du rendement projeté',
+    p.central[12] === U.roundCents(1000000 * 1.025),
+    `obtenu ${p.central[12]}, attendu ${U.roundCents(1000000 * 1.025)}`);
+}
+{
+  // D3 + D4 : objectifs à double date, rente paramétrable.
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'titres', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: U.today(), balance: 1000000 });
+  S.settings.returns.titres = 0.08;
+  S.settings.vols.titres = 0;
+  S.settings.inflation = 0.02;
+  S.budget.savings = [];
+  const p = Projection.run(240);
+  const r = Projection.goalReach(p, 1500000);
+  check('D3 — objectif : la date en pouvoir d\'achat constant arrive après la date nominale',
+    r.nominal !== null && r.reel !== null && r.reel > r.nominal,
+    `nominal ${r.nominal}, réel ${r.reel}`);
+  S.settings.renteRate = 0.03;
+  const rt = Projection.rente(1000000);
+  check('D4 — le taux de rente est paramétrable',
+    rt.taux === 0.03 && rt.monthly === U.roundCents(1000000 * 0.03 / 12));
+}
+/* ---- Planisphère : des régions vers des pays, sans rien inventer ---- */
+{
+  const M = (o) => new Map(Object.entries(o));
+  const r1 = GeoMap.parPays(M({ 'États-Unis': 100000, 'Japon': 50000 }));
+  check('Carte — un pays nommé va directement sur la carte',
+    r1.parPays.get('United States of America') === 100000 &&
+    r1.parPays.get('Japan') === 50000 && r1.horsCarte.length === 0 && r1.place === 150000);
+
+  const r2 = GeoMap.parPays(M({ 'Zone euro': 100000 }));
+  const somme2 = U.sum([...r2.parPays.values()]);
+  check('Carte — une région se répartit entre ses pays, au centime près',
+    somme2 === 100000 && r2.parPays.size > 3 &&
+    r2.parPays.get('France') > r2.parPays.get('Austria'),
+    `${somme2} réparti sur ${r2.parPays.size} pays`);
+
+  const r3 = GeoMap.parPays(M({ 'Reste du monde': 40000, 'France': 60000 }));
+  check('Carte — ce qui ne désigne aucun territoire n\'est jamais placé au hasard',
+    r3.horsCarte.length === 1 && r3.horsCarte[0].value === 40000 &&
+    r3.place === 60000 && !r3.parPays.has('Greenland'),
+    JSON.stringify(r3.horsCarte));
+
+  const r4 = GeoMap.parPays(M({ 'Vulcain': 30000, 'Chine': 70000 }));
+  check('Carte — une région inconnue est signalée hors carte, pas diluée en silence',
+    r4.horsCarte.some(h => h.label === 'Vulcain') &&
+    U.sum([...r4.parPays.values()]) + U.sum(r4.horsCarte, h => h.value) === r4.total);
+
+  check('Carte — la géométrie est embarquée, aucune ressource n\'est chargée à l\'exécution',
+    Object.keys(WorldMap.PATHS).length > 150 && WorldMap.PATHS['France'] &&
+    WorldMap.W > 0 && WorldMap.H > 0 && !WorldMap.PATHS['Antarctica']);
+
+  // La barre qui traversait la carte venait des pays à cheval sur
+  // l'antiméridien, tracés d'un bord à l'autre au lieu d'être coupés.
+  const traversants = [];
+  for (const [nom, d] of Object.entries(WorldMap.PATHS)) {
+    for (const ring of d.split('Z')) {
+      if (!ring) continue;
+      const xs = ring.replace(/^M/, '').split(/[ML]/).filter(Boolean).map(s => +s.split(',')[0]);
+      if (Math.max(...xs) - Math.min(...xs) > WorldMap.W * 0.7) traversants.push(nom);
+    }
+  }
+  check('Carte — aucun tracé ne traverse la carte : l\'antiméridien est coupé',
+    traversants.length === 0, traversants.join(', '));
+
+  // Projection volontairement faussée : l'hémisphère Nord doit occuper plus
+  // de place que sa part réelle, sans quoi l'Europe reste illisible.
+  const y = (pays) => GeoMap.centre(WorldMap.PATHS[pays]).y;
+  check('Carte — l\'hémisphère Nord est dilaté : l\'Europe occupe plus de place que les tropiques',
+    (y('Nigeria') - y('Germany')) > (y('Angola') - y('Nigeria')),
+    `Allemagne→Nigeria ${Math.round(y('Nigeria') - y('Germany'))} px, Nigeria→Angola ${Math.round(y('Angola') - y('Nigeria'))} px`);
+
+  // Deux natures d'argent non investi, nommées sans ambiguïté : un solde de
+  // compte courant n'est pas de l'argent en attente de placement.
+  {
+    const S = Store.state;
+    const avant = { comptes: S.accounts.slice(), certs: S.certifications.slice(), snaps: S.positionSnapshots.slice() };
+    S.accounts = [{ id: 'cc', name: 'CC', type: 'courant', order: 0 },
+                  { id: 'p', name: 'PEA', type: 'pea', order: 1 }];
+    S.certifications = [{ id: 'a', accountId: 'cc', date: U.today(), balance: 300000 },
+                        { id: 'b', accountId: 'p', date: U.today(), balance: 50000 }];
+    S.positionSnapshots = [{ id: 's', accountId: 'p', symbol: 'ZZ', date: U.today(), qty: 10, source: 'm' }];
+    Engine.setPrice('ZZ', U.today(), 10000);
+    Engine.invalidate();
+    const cls = Engine.allocationByClass(U.today());
+    check('EX-6 — comptes courants et espèces de compte-titres sont deux classes distinctes et nommées',
+      cls.get('Comptes courants') === 300000 &&
+      cls.get('Espèces sur comptes-titres') === 50000 &&
+      cls.get('Actions') === 100000 && !cls.has('Liquidités'),
+      [...cls.entries()].map(([k, v]) => `${k}=${v}`).join(' · '));
+
+    // Un livret est un placement : il ne se confond ni avec la trésorerie du
+    // compte courant, ni avec l'argent qui dort sur un compte-titres.
+    S.accounts.push({ id: 'l', name: 'Livret A', type: 'livret', order: 2 });
+    S.certifications.push({ id: 'cl', accountId: 'l', date: U.today(), balance: 1500000 });
+    Engine.invalidate();
+    const cls2 = Engine.allocationByClass(U.today());
+    check('Livret — classé comme placement, jamais confondu avec un compte courant',
+      cls2.get('Livrets d\'épargne') === 1500000 &&
+      cls2.get('Comptes courants') === 300000 &&
+      cls2.get('Livrets d\'épargne') !== cls2.get('Comptes courants'),
+      [...cls2.entries()].map(([k, v]) => `${k}=${v}`).join(' · '));
+
+    // Sur une assurance-vie, la part non placée en unités de compte est le
+    // fonds euros : un placement, pas de la trésorerie en attente.
+    S.accounts = [{ id: 'av', name: 'AV', type: 'av', order: 0 }];
+    S.certifications = [{ id: 'x', accountId: 'av', date: U.today(), balance: 800000 }];
+    S.positionSnapshots = [];
+    Engine.invalidate();
+    const cls3 = Engine.allocationByClass(U.today());
+    check('Assurance-vie — la part non investie en supports est du fonds euros, pas des espèces oisives',
+      cls3.get('Fonds euros') === 800000 && !cls3.has('Espèces sur comptes-titres'),
+      [...cls3.entries()].map(([k, v]) => `${k}=${v}`).join(' · '));
+
+    S.accounts = avant.comptes; S.certifications = avant.certs; S.positionSnapshots = avant.snaps;
+    Engine.invalidate();
+  }
+
+  // Le cadrage du zoom se règle sur les pays qui portent le poids : une
+  // ligne résiduelle en Finlande ne doit pas étirer le cadre européen.
+  {
+    const gros = GeoMap.cadre(WorldMap.PATHS['France']);
+    const loin = GeoMap.cadre(WorldMap.PATHS['Finland']);
+    check('Carte — le cadre d\'un pays ignore ses confettis lointains',
+      gros && loin && gros.x1 > gros.x0 && gros.y1 > gros.y0);
+    // Deux pays voisins donnent un cadre plus serré qu'en y ajoutant un pays
+    // éloigné : c'est ce que le filtre à 90 % du poids évite.
+    const union = (a, b) => ({ x0: Math.min(a.x0, b.x0), x1: Math.max(a.x1, b.x1),
+                               y0: Math.min(a.y0, b.y0), y1: Math.max(a.y1, b.y1) });
+    const allemagne = GeoMap.cadre(WorldMap.PATHS['Germany']);
+    const serre = union(gros, allemagne);
+    const large = union(serre, loin);
+    check('Carte — écarter les traces resserre le cadrage, donc rapproche la vue',
+      (serre.y1 - serre.y0) < (large.y1 - large.y0),
+      `hauteur ${Math.round(serre.y1 - serre.y0)} px contre ${Math.round(large.y1 - large.y0)} px`);
+  }
+
+  /* ---- Coffre : chiffrement des données au repos ---- */
+  {
+    const phrase = 'phrase de test suffisamment longue';
+    const { cle, sel } = await Coffre.deriver(phrase, null);
+    const env = await Coffre.sceller(cle, sel, { marqueur: 'secret', n: 42 });
+    check('Coffre — le fichier scellé ne laisse rien lire en clair',
+      !env.includes('secret') && Coffre.estEnveloppe(env) && JSON.parse(env).kdf.sel === sel,
+      env.slice(0, 90) + '…');
+    const relu = await Coffre.ouvrir(phrase, env);
+    check('Coffre — la même phrase rouvre exactement les mêmes données',
+      relu.donnees.marqueur === 'secret' && relu.donnees.n === 42 && relu.sel === sel);
+    let refuse = false;
+    try { await Coffre.ouvrir(phrase + 'x', env); } catch (e) { refuse = e.message === 'PHRASE_INVALIDE'; }
+    check('Coffre — une phrase fausse est refusée, jamais approximée (AES-GCM authentifie)', refuse);
+    // Le sel voyage dans l'enveloppe : c'est ce qui permet à un second
+    // appareil de retrouver la clé à partir de la seule phrase.
+    const surAutreAppareil = await Coffre.ouvrir(phrase, env);
+    check('Coffre — un autre appareil retrouve la clé sans rien connaître d\'autre que la phrase',
+      surAutreAppareil.donnees.marqueur === 'secret');
+    const env2 = await Coffre.sceller(cle, sel, { marqueur: 'secret', n: 42 });
+    check('Coffre — deux scellés du même contenu diffèrent (vecteur d\'initialisation tiré à neuf)',
+      JSON.parse(env).iv !== JSON.parse(env2).iv);
+  }
+
+  /* ---- Dépôt de synchronisation : concurrence entre appareils (P1) ---- */
+  {
+    // Faux dépôt et faux stockage local : la logique est éprouvée sans
+    // toucher ni au réseau ni aux données réelles du navigateur.
+    const local = new Map();
+    const memoire = {
+      get: Store._get, put: Store._put, del: Store._del, cle: Store._cle, sel: Store._sel,
+      state: Store.state, sha: Store._shaDistant, cfg: Depot.cfg,
+      lire: Depot.lire, ecrire: Depot.ecrire, shaCourant: Depot.shaCourant, sauv: Depot.deposerSauvegarde,
+    };
+    Store._get = async (k) => local.get(k);
+    Store._put = async (k, v) => { local.set(k, v); };
+    Store._del = async (k) => { local.delete(k); };
+
+    const distant = { texte: null, sha: null, backups: [] };
+    let compteur = 0;
+    Depot.cfg = { owner: 'moi', repo: 'essor-data', branch: 'main', chemin: 'd.enc', jeton: 'x' };
+    Depot.lire = async () => (distant.texte ? { texte: distant.texte, sha: distant.sha } : null);
+    Depot.shaCourant = async () => distant.sha;
+    Depot.deposerSauvegarde = async (nom) => { distant.backups.push(nom); return { sha: 'b' }; };
+    Depot.ecrire = async (texte, sha) => {
+      if (sha !== distant.sha) { const e = new Error('CONFLIT'); e.code = 'CONFLIT'; throw e; }
+      distant.texte = texte; distant.sha = 'sha' + (++compteur);
+      return { sha: distant.sha };
+    };
+
+    const phrase = 'phrase de test suffisamment longue';
+    const derive = await Coffre.deriver(phrase, null);
+    Store._cle = derive.cle; Store._sel = derive.sel;
+    Store._shaDistant = null; Store.conflit = false; Store._enAttente = false;
+
+    Store.state = { schema: 1, marqueur: 'origine' };
+    await Store._doSave();
+    check('Dépôt — le premier enregistrement dépose l\'enveloppe et retient sa version',
+      distant.texte && Store._shaDistant === distant.sha && Store.saveStatus === 'saved' &&
+      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'origine');
+    check('Dépôt — rien n\'est déposé en clair', !distant.texte.includes('origine'));
+
+    // Un autre appareil a enregistré entre temps : la version du dépôt a changé.
+    distant.texte = await Coffre.sceller(Store._cle, Store._sel, { schema: 1, marqueur: 'autre appareil' });
+    distant.sha = 'venu-d-ailleurs';
+
+    Store.state = { schema: 1, marqueur: 'ma session' };
+    let alerte = 0;
+    Store.onConflict = () => alerte++;
+    await Store._doSave();
+    check('P1 — une version modifiée ailleurs n\'est jamais écrasée en silence',
+      Store.conflit === true && alerte === 1 &&
+      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'autre appareil',
+      `conflit=${Store.conflit}, alertes=${alerte}`);
+    check('P1 — les données restent malgré tout à l\'abri sur l\'appareil',
+      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).marqueur === 'ma session');
+    check('P1 — l\'envoi se suspend tant que le conflit dure',
+      await (async () => {
+        await Store._doSave();
+        return Store.conflit === true &&
+          (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'autre appareil';
+      })());
+
+    await Store.imposerMaVersion();
+    check('P1 — garder sa session conserve la version écartée dans « backups »',
+      Store.conflit === false &&
+      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'ma session' &&
+      distant.backups.some(n => /conflit/.test(n)),
+      distant.backups.join(', '));
+
+    // L'autre choix : abandonner sa session et reprendre celle du dépôt.
+    distant.texte = await Coffre.sceller(Store._cle, Store._sel, { schema: 1, marqueur: 'venu du dépôt' });
+    distant.sha = 'sha-repris';
+    await Store.reprendreLautreVersion();
+    check('P1 — reprendre l\'autre version adopte le dépôt et sauvegarde la sienne',
+      Store.state.marqueur === 'venu du dépôt' && Store._shaDistant === 'sha-repris' &&
+      ((await Store.listerSauvegardesLocales()).some(b => /version-locale-ecartee/.test(b.nom))));
+
+    // Hors ligne : l'enregistrement local aboutit, seule la synchronisation attend.
+    Depot.ecrire = async () => { const e = new Error('HORS_LIGNE'); e.code = 'HORS_LIGNE'; throw e; };
+    Store.state = { schema: 1, marqueur: 'dans le train' };
+    Store.conflit = false;
+    await Store._doSave();
+    check('Hors ligne — les données sont enregistrées sur l\'appareil, l\'envoi est simplement en attente',
+      Store.saveStatus === 'local' && Store._enAttente === true &&
+      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).marqueur === 'dans le train');
+
+    Store._get = memoire.get; Store._put = memoire.put; Store._del = memoire.del;
+    Store._cle = memoire.cle; Store._sel = memoire.sel; Store.state = memoire.state;
+    Store._shaDistant = memoire.sha; Store.onConflict = null; Store.conflit = false; Store._enAttente = false;
+    Depot.cfg = memoire.cfg; Depot.lire = memoire.lire; Depot.ecrire = memoire.ecrire;
+    Depot.shaCourant = memoire.shaCourant; Depot.deposerSauvegarde = memoire.sauv;
+    check('Dépôt — le test rend la persistance intacte',
+      typeof Store._put === 'function' && Depot.cfg === memoire.cfg);
+  }
+
+  /* ---- QIF : un format sans en-tête, où la date est piégeuse ---- */
+  {
+    const q = (t) => Importer.parseQif(t);
+
+    const fr = q(`!Type:Bank
+D15/08/2026
+T-42,50
+PCARREFOUR MARKET
+MPAIEMENT CB 15/08
+^
+D01/09/2026
+T1 500,00
+PSALAIRE AOUT
+^`);
+    check('QIF — les opérations sont lues, montants en centimes et libellés reconstitués',
+      fr.rows.length === 2 && fr.rows[0].date === '2026-08-15' && fr.rows[0].amount === -4250 &&
+      /CARREFOUR MARKET/.test(fr.rows[0].label) && fr.rows[1].amount === 150000,
+      JSON.stringify(fr.rows.map(r => [r.date, r.amount])));
+
+    // Même relevé, ordre américain : c'est le fichier entier qui tranche.
+    const us = q(`!Type:Bank
+D08/15/2026
+T-42.50
+PCARREFOUR
+^
+D09/01/2026
+T1500.00
+PSALAIRE
+^`);
+    check('QIF — l\'ordre des dates est déduit du fichier, pas supposé',
+      us.rows[0].date === '2026-08-15' && us.rows[1].date === '2026-09-01',
+      JSON.stringify(us.rows.map(r => r.date)));
+
+    // Sans indice (tous les jours ≤ 12), l'usage français l'emporte, et il est dit.
+    const ambigu = q('!Type:Bank\nD05/06/2026\nT-10,00\nPTEST\n^');
+    check('QIF — à défaut d\'indice, le jour vient d\'abord (usage français), et l\'ordre retenu est déclaré',
+      ambigu.rows[0].date === '2026-06-05' && ambigu.qifOrdre === 'JMA');
+
+    // Le nom déclaré par un bloc « !Account » est une métadonnée : indice légitime (EX-25).
+    const avecCompte = q('!Account\nNLivret A\nTBank\n^\n!Type:Bank\nD15/08/2026\nT100,00\nPINTERETS\n^');
+    const clues = Importer.extractClues({ name: 'export.qif' }, avecCompte);
+    check('QIF — le compte déclaré devient un indice de rattachement, jamais un libellé (EX-25)',
+      clues.includes('qif:LIVRET A') && avecCompte.rows.length === 1,
+      clues.join(' · '));
+
+    const inv = q('!Type:Invst\nD10/03/2026\nNBuy\nYDCAM.FR\nQ10\nI25,50\nT255,00\n^\nD11/03/2026\nNDiv\nYDCAM.FR\nT12,00\n^');
+    check('QIF — un achat de titres devient un débit espèces ET un mouvement de titres (EX-11)',
+      inv.rows[0].amount === -25500 && inv.rows[0].qty === 10 &&
+      inv.rows[0].symbol === 'DCAM.FR' && inv.rows[0].priceCents === 2550,
+      JSON.stringify(inv.rows[0]));
+    check('QIF — un dividende reste un simple encaissement, sans quantité',
+      inv.rows[1].amount === 1200 && inv.rows[1].qty === undefined);
+  }
+
+  // Le camembert marque ses parts, pour qu'un autre écran puisse y réagir.
+  {
+    const bac = document.createElement('div');
+    document.body.appendChild(bac);
+    Charts.donut(bac, [{ label: 'Europe', value: 100, color: '#026cd4' },
+                       { label: 'Asie', value: 50, color: '#d3331d' }]);
+    const parts = [...bac.querySelectorAll('[data-part]')].map(e => e.dataset.part);
+    check('Camembert — chaque part est identifiable, secteur comme légende',
+      parts.filter(p => p === 'Europe').length === 2 &&
+      parts.filter(p => p === 'Asie').length === 2,
+      parts.join(', '));
+    bac.remove();
+  }
+
+  // Cartogramme : c'est l'AIRE du disque qui porte le poids, pas son rayon.
+  // Quatre fois plus investi doit faire un disque quatre fois plus grand en
+  // surface, donc deux fois plus large — l'inverse exagérerait au carré.
+  const rMax = 100;
+  const rGros = GeoMap.rayon(0.40, 0.40, rMax), rPetit = GeoMap.rayon(0.10, 0.40, rMax);
+  check('Carte — l\'aire du disque est proportionnelle au poids, non le rayon',
+    Math.abs(rGros / rPetit - 2) < 0.01 && Math.abs(rGros - rMax) < 0.01 &&
+    GeoMap.rayon(0, 0.4, rMax) === 0,
+    `r(40 %) = ${rGros.toFixed(1)}, r(10 %) = ${rPetit.toFixed(1)}`);
+  check('Carte — un poids minuscule garde un disque cliquable',
+    GeoMap.rayon(0.0001, 0.5, rMax) >= 9);
+
+  // La relaxation doit séparer des disques initialement confondus, tout en
+  // les gardant près de leur place : sinon l'Europe est un amas illisible.
+  const c = GeoMap.disposer([
+    { x: 500, y: 200, x0: 500, y0: 200, r: 30 },
+    { x: 505, y: 205, x0: 505, y0: 205, r: 30 },
+    { x: 495, y: 195, x0: 495, y0: 195, r: 30 },
+  ], WorldMap.W, WorldMap.H);
+  let recouvrement = 0, derive = 0;
+  for (let i = 0; i < c.length; i++) {
+    derive = Math.max(derive, Math.hypot(c[i].x - c[i].x0, c[i].y - c[i].y0));
+    for (let j = i + 1; j < c.length; j++) {
+      recouvrement = Math.max(recouvrement, c[i].r + c[j].r - Math.hypot(c[j].x - c[i].x, c[j].y - c[i].y));
+    }
+  }
+  check('Carte — les disques cessent de se recouvrir sans s\'éloigner de leur pays',
+    recouvrement <= 0.5 && derive < 90,
+    `recouvrement ${recouvrement.toFixed(1)} px, dérive max ${derive.toFixed(0)} px`);
+
+  // Le centre sert à poser l'étiquette : sur la plus grande masse, sinon
+  // celle des États-Unis part dans le Pacifique, tirée par l'Alaska.
+  // Bornes en fractions de la carte, pour rester valables si la projection
+  // change : les États-Unis contigus, pas l'Alaska ni le milieu du Pacifique.
+  const cUS = GeoMap.centre(WorldMap.PATHS['United States of America']);
+  const fx = cUS ? cUS.x / WorldMap.W : -1, fy = cUS ? cUS.y / WorldMap.H : -1;
+  check('Carte — l\'étiquette d\'un pays morcelé se pose sur sa plus grande masse',
+    fx > 0.17 && fx < 0.32 && fy > 0.35 && fy < 0.65,
+    `x ${(fx * 100).toFixed(0)} %, y ${(fy * 100).toFixed(0)} % de la carte`);
+}
+
+/* ---- Épargne simulée : réglable depuis l'écran Patrimoine ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.accounts.push({ id: 'pea', name: 'PEA', type: 'pea', order: 1 });
+  S.certifications.push({ id: 'c1', accountId: 'cc', date: U.today(), balance: 0 });
+  S.certifications.push({ id: 'c2', accountId: 'pea', date: U.today(), balance: 0 });
+  S.targets.push({ accountId: 'pea', share: 1 });
+  S.budget.savings.push({ id: 's', name: 'ep', amount: 30000, accountId: 'pea' });
+  S.settings.returns.pea = 0; S.settings.vols.pea = 0; S.settings.inflation = 0;
+  check('Épargne simulée — par défaut, celle des versements du budget',
+    Projection.monthlySavings() === 30000 && Projection.run(12).central[12] === 360000,
+    `${Projection.monthlySavings()}`);
+  // Le montant choisi sur l'écran Patrimoine prime et se capitalise vraiment.
+  S.settings.projSavings = 50000;
+  S.settings.projSavingsSource = 'manuel';
+  check('Épargne simulée — le montant réglé sur l\'écran Patrimoine prime sur le budget',
+    Projection.monthlySavings() === 50000 && Projection.run(12).central[12] === 600000,
+    `${Projection.run(12).central[12]}`);
+  check('Épargne simulée — le Monte Carlo utilise le même montant',
+    Projection.monteCarlo(12, { paths: 20 }).central[12] === 600000);
+  // Revenir au budget se fait en effaçant le réglage.
+  S.settings.projSavings = null;
+  check('Épargne simulée — revenir au budget restaure la somme des versements',
+    Projection.monthlySavings() === 30000);
+}
+
+/* ---- Fiscalité de sortie par enveloppe (audit, chantier 6) ---- */
+{
+  const S = fresh();
+  const gains = 1000000; // 10 000 € de gains : valeur 30 000, base 20 000
+  const t = (compte, yearsAhead = 10) => Fisc.tax(compte, 3000000, 2000000, S.settings, yearsAhead);
+  check('Fisc — PEA mûr : 17,2 % de prélèvements sociaux sur les gains',
+    t({ type: 'pea' }) === U.roundCents(gains * 0.172));
+  check('Fisc — CTO : PFU 30 % sur les gains',
+    t({ type: 'titres' }) === U.roundCents(gains * 0.30));
+  check('Fisc — crypto : flat tax 30 %',
+    t({ type: 'crypto' }) === U.roundCents(gains * 0.30));
+  check('Fisc — livret réglementé et immobilier : exonérés',
+    t({ type: 'livret' }) === 0 && t({ type: 'immo' }) === 0);
+  check('Fisc — AV mûre : 17,2 % sur tout + 7,5 % au-delà de l\'abattement de 4 600 €',
+    t({ type: 'av' }) === U.roundCents(gains * 0.172 + (gains - 460000) * 0.075),
+    `obtenu ${t({ type: 'av' })}`);
+  const annee = new Date().getFullYear();
+  check('Fisc — PEA jeune à l\'horizon : PFU 30 %, pas 17,2 %',
+    t({ type: 'pea', openedYear: annee }, 2) === U.roundCents(gains * 0.30) &&
+    t({ type: 'pea', openedYear: annee - 4 }, 2) === U.roundCents(gains * 0.172));
+  check('Fisc — un taux personnalisé prime sur la règle de l\'enveloppe',
+    t({ type: 'livret', taxRateOverride: 0.30 }) === U.roundCents(gains * 0.30) &&
+    t({ type: 'titres', taxRateOverride: 0 }) === 0);
+  check('Fisc — jamais d\'impôt sans gain : l\'impôt frappe les gains, pas le capital',
+    Fisc.tax({ type: 'titres' }, 2000000, 2000000, S.settings, 10) === 0 &&
+    Fisc.tax({ type: 'titres' }, 1500000, 2000000, S.settings, 10) === 0);
+}
+{
+  // Base fiscale : les plus-values latentes (PRU connus) sont déjà imposables.
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'pea', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: U.today(), balance: 0 });
+  S.positionSnapshots.push({ id: 'p', accountId: 'a', symbol: 'X', date: U.today(), qty: 100, source: 'm' });
+  Engine.setPrice('X', U.today(), 10000);
+  S.pru['X'] = 8000;
+  check('Fisc — la base fiscale retranche la plus-value latente connue (PRU)',
+    Engine.fiscalBasis('a') === 800000 && Engine.latentGain('a') === 200000,
+    `base ${Engine.fiscalBasis('a')}, latente ${Engine.latentGain('a')}`);
+}
+{
+  // Intégration projection : net = brut − 30 % des gains, exactement.
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'titres', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: U.today(), balance: 1000000 });
+  S.settings.returns.titres = 0.10;
+  S.settings.vols.titres = 0;
+  S.settings.inflation = 0;
+  S.budget.savings = [];
+  const mc = Projection.monteCarlo(12, { paths: 50 });
+  const attendu = U.roundCents(1000000 * 1.1) - U.roundCents(U.roundCents(1000000 * 0.1) * 0.30);
+  check('Fisc — projection CTO : net à l\'horizon = brut − 30 % des gains, au centime',
+    mc.net.central === attendu, `obtenu ${mc.net.central}, attendu ${attendu}`);
+  check('Fisc — le net ne dépasse jamais le brut, percentile par percentile',
+    mc.net.p10 <= mc.p10[12] && mc.net.p50 <= mc.p50[12] && mc.net.p90 <= mc.p90[12] &&
+    mc.net.p10 <= mc.net.p50 && mc.net.p50 <= mc.net.p90);
+}
+{
+  // Les versements ne sont jamais imposés : sans rendement, net = brut.
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.accounts.push({ id: 'pea', name: 'PEA', type: 'pea', order: 1 });
+  S.certifications.push({ id: 'c1', accountId: 'cc', date: U.today(), balance: 1000000 });
+  S.certifications.push({ id: 'c2', accountId: 'pea', date: U.today(), balance: 0 });
+  S.targets.push({ accountId: 'pea', share: 1 });
+  S.budget.savings.push({ id: 's', name: 'ep', amount: 50000, accountId: 'pea' });
+  S.settings.returns.pea = 0;
+  S.settings.vols.pea = 0;
+  S.settings.inflation = 0;
+  const mc = Projection.monteCarlo(24, { paths: 20 });
+  check('Fisc — un patrimoine fait uniquement de versements ne doit rien : net = brut',
+    mc.net.central === mc.central[24], `net ${mc.net.central}, brut ${mc.central[24]}`);
+}
+
+{
+  // D5 : le rendement constaté annualisé retrouve la réalité des cours.
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'titres', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: '2025-07-31', balance: 0 });
+  S.positionSnapshots.push({ id: 'p', accountId: 'a', symbol: 'X', date: '2025-07-31', qty: 100, source: 'm' });
+  for (let i = 0; i <= 13; i++) {
+    const m = U.addMonths('2025-07', i);
+    Engine.setPrice('X', U.monthEnd(m), Math.round(10000 * Math.pow(1.10, i / 12)));
+  }
+  const real = Engine.realizedByType();
+  check('D5 — le rendement constaté annualisé retrouve ~10 %/an à partir des cours',
+    real.titres && Math.abs(real.titres.annual - 0.10) < 0.02,
+    JSON.stringify(real));
+}
+
+/* ---- Critère 2 : solde reconstruit = solde certifié à la date de certification ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'courant', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: '2026-03-15', balance: 123456 });
+  S.transactions.push({ id: 't1', accountId: 'a', date: '2026-03-10', amount: -5000, label: 'avant', hash: 'x1' });
+  S.transactions.push({ id: 't2', accountId: 'a', date: '2026-03-20', amount: 7000, label: 'après', hash: 'x2' });
+  check('C2 — solde reconstruit identique au solde certifié à sa date',
+    Engine.cashBalance('a', '2026-03-15') === 123456,
+    `obtenu ${Engine.cashBalance('a', '2026-03-15')}`);
+  check('C2b — solde après = certifié + opérations postérieures',
+    Engine.cashBalance('a', '2026-03-31') === 130456);
+  check('C2c — solde avant = certifié − opérations intermédiaires',
+    Engine.cashBalance('a', '2026-03-01') === 128456);
+}
+
+/* ---- Critère 3 : assistant et projection allouent à l'identique ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.accounts.push({ id: 'la', name: 'LA', type: 'livret', order: 1, plafond: 2295000 });
+  S.accounts.push({ id: 'cto', name: 'CTO', type: 'titres', order: 2 });
+  S.certifications.push({ id: 'c1', accountId: 'cc', date: U.today(), balance: 200000 });
+  S.certifications.push({ id: 'c2', accountId: 'la', date: U.today(), balance: 400000 });
+  S.certifications.push({ id: 'c3', accountId: 'cto', date: U.today(), balance: 0 });
+  S.trades.push({ id: 'tr', accountId: 'cto', symbol: 'ETF', date: '2026-01-01', qtyDelta: 10 });
+  S.prices['ETF'] = { '2026-01-01': 9500 };
+  S.targets.push({ accountId: 'la', share: 0.3, cap: 600000 });
+  S.targets.push({ accountId: 'cto', share: 0.7 });
+  S.budget.savings.push({ id: 's', name: 'ep', amount: 50000, accountId: 'la' });
+  const assistant = Alloc.allocate(50000, Alloc.buildContext(U.today()));
+  const proj = Projection.run(3);
+  const pa = proj.firstAlloc;
+  const same = pa && ['cc', 'la', 'cto'].every(id =>
+    assistant.perAccount[id].amount === pa.perAccount[id].amount) &&
+    assistant.leftover === pa.leftover;
+  check('C3 — pour un même montant, assistant et projection allouent à l\'identique',
+    same, JSON.stringify({ assistant: assistant.perAccount, proj: pa && pa.perAccount }));
+  // EX-54 : parts entières, l'argent versé sur le CTO est exactement le coût des parts.
+  const cto = assistant.perAccount['cto'];
+  check('EX-54 — versement CTO = coût exact des parts entières',
+    cto.amount === U.sum(cto.buys, b => b.cost),
+    `amount ${cto.amount}, coût ${U.sum(cto.buys, b => b.cost)}`);
+  // Rien ne se perd ni ne s'invente entre le montant confié et les ordres.
+  const totalReparti = U.sum(Object.values(assistant.perAccount), p => p.amount) + assistant.leftover;
+  check('EX-55/EX-77 — la somme des versements et du reste égale exactement le montant confié',
+    totalReparti === 50000 &&
+    Object.values(assistant.perAccount).every(p => Number.isInteger(p.amount) &&
+      p.buys.every(b => Number.isInteger(b.cost))),
+    `${totalReparti} vs 50000`);
+}
+
+/* ---- Critères 6, 7, 8 : import multi-comptes, réimport, libellé trompeur ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0, fingerprints: ['FR7611111111111'] });
+  S.accounts.push({ id: 'la', name: 'LA', type: 'livret', order: 1, fingerprints: ['FR7622222222222'] });
+  S.accounts.push({ id: 'nb', name: 'Néo', type: 'courant', order: 2, fingerprints: ['NEOBANK'] });
+  const enc = new TextEncoder();
+  // 8 mois × 3 comptes, dont un libellé « VIR LIVRET A » sur le relevé CC (critère 8).
+  const files = [];
+  const mois = ['2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'];
+  let csvCC = 'Compte : FR7611111111111\nDate;Libellé;Montant\n';
+  let csvLA = 'Compte : FR7622222222222\nDate;Libellé;Montant\n';
+  let csvNB = 'Date,Description,Amount\n';
+  for (const m of mois) {
+    csvCC += `05/${m.slice(5, 7)}/${m.slice(0, 4)};VIR LIVRET A;-100,00\n`;
+    csvCC += `28/${m.slice(5, 7)}/${m.slice(0, 4)};SALAIRE;2000,00\n`;
+    csvLA += `06/${m.slice(5, 7)}/${m.slice(0, 4)};VIREMENT RECU;100,00\n`;
+    csvNB += `${m}-10,COURSES BIO,-55.30\n`;
+  }
+  files.push({ name: 'releve_cc.csv', bytes: enc.encode(csvCC) });
+  files.push({ name: 'releve_la.csv', bytes: enc.encode(csvLA) });
+  files.push({ name: 'NEOBANK-export.csv', bytes: enc.encode(csvNB) });
+  const session = await Importer.analyze(files);
+  check('C6a — les 3 fichiers sont reconnus et rattachés au bon compte',
+    session.files.length === 3 &&
+    session.files[0].accountId === 'cc' && session.files[1].accountId === 'la' && session.files[2].accountId === 'nb',
+    session.files.map(f => `${f.name}→${f.accountId}`).join(', '));
+  check('C8 — le relevé CC mentionnant « LIVRET A » reste attribué au CC',
+    session.files[0].accountId === 'cc');
+  const report = Importer.apply(session, {});
+  check('C6b — 8 mois × 3 comptes : chaque opération au bon compte et au bon mois',
+    report.added === 8 * 4 &&
+    mois.every(m => S.transactions.some(t => t.accountId === 'nb' && U.monthOf(t.date) === m)),
+    `ajoutées ${report.added}`);
+  const nb1 = S.transactions.length;
+  const session2 = await Importer.analyze(files);
+  const report2 = Importer.apply(session2, {});
+  check('C7 — réimporter la même archive n\'ajoute rien',
+    report2.added === 0 && S.transactions.length === nb1,
+    `ajoutées ${report2.added}`);
+
+  /* ---- Critère 5 / EX-41 : un virement dans deux relevés compte une fois ---- */
+  Rules.detectTransfers();
+  const juin = Engine.monthFlows('2026-06');
+  const virCount = juin.txs.filter(t => /VIR LIVRET|VIREMENT RECU/.test(t.label)).length;
+  check('C5 — virement présent dans les deux relevés : neutre, compté 0 fois dans les flux',
+    virCount === 0, `flux non internes contenant le virement : ${virCount}`);
+  const paired = S.transactions.filter(t => t.pairId).length;
+  check('EX-41 — les deux faces du virement sont appariées', paired >= 2, `appariées ${paired}`);
+}
+
+/* ---- Critères 9, 10, 11 : intégrité de l'historique ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'courant', order: 0 });
+  S.certifications.push({ id: 'c', accountId: 'a', date: '2026-01-31', balance: 100000 });
+  S.transactions.push({ id: 't1', accountId: 'a', date: '2026-02-10', amount: 50000, label: 'x', hash: 'x1' });
+  Engine.computeSnapshots();
+  const fevAvant = S.snapshots['2026-02'].total;
+  // Correction d'une opération d'un mois passé → l'historique se met à jour seul (crit. 10)
+  S.transactions[0].amount = 60000;
+  Engine.invalidate();
+  const fevApres = Engine.snapshots()['2026-02'].total;
+  check('C10 — après correction, l\'historique se met à jour sans action manuelle',
+    fevApres === fevAvant + 10000, `avant ${fevAvant}, après ${fevApres}`);
+  // Le mois passé vaut le patrimoine à son dernier jour, pas la valeur du jour (crit. 9, EX-73/107)
+  check('C9 — un mois passé est valorisé à son dernier jour, pas au jour de consultation',
+    S.snapshots['2026-02'].asOf === '2026-02-28' || S.snapshots['2026-02'].asOf === '2026-02-29');
+  check('C11 — données dérivées marquées obsolètes → reconstruites à la lecture',
+    S.snapshotsDirty === false);
+}
+
+/* ---- Critère 16 / EX-50/114 : détection des décalages conservatrice ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'a', name: 'A', type: 'courant', order: 0 });
+  // Remboursements ponctuels irréguliers (montants dispersés) → jamais proposés (EX-114)
+  S.transactions.push({ id: 'r1', accountId: 'a', date: '2026-01-03', amount: 3000, label: 'REMBOURSEMENT PAUL', hash: 'r1' });
+  S.transactions.push({ id: 'r2', accountId: 'a', date: '2026-03-02', amount: 12000, label: 'REMBOURSEMENT PAUL', hash: 'r2' });
+  S.transactions.push({ id: 'r3', accountId: 'a', date: '2026-05-04', amount: 800, label: 'REMBOURSEMENT PAUL', hash: 'r3' });
+  // Salaire régulier fin de mois, dont un versé début du mois suivant
+  const sal = [['2026-01-28', 's1'], ['2026-02-27', 's2'], ['2026-03-28', 's3'], ['2026-04-28', 's4'], ['2026-06-02', 's5']];
+  for (const [d, id] of sal) S.transactions.push({ id, accountId: 'a', date: d, amount: 250000, label: 'VIREMENT SALAIRE ACME', hash: id });
+  const proposals = Rules.detectShifts();
+  check('C16a — aucun faux positif : les remboursements irréguliers ne sont jamais proposés',
+    !proposals.some(p => p.txId.startsWith('r')), JSON.stringify(proposals.map(p => p.txId)));
+  check('C16b — le salaire de mai versé le 2 juin est détecté → rattachement à mai',
+    proposals.length === 1 && proposals[0].txId === 's5' && proposals[0].toMonth === '2026-05',
+    JSON.stringify(proposals));
+  // EX-51 : après application, plus rien de proposé
+  if (proposals.length === 1) {
+    Rules.applyShift(proposals[0]);
+    check('EX-51 — relancer la détection après correction ne propose rien',
+      Rules.detectShifts().length === 0);
+    const t = S.transactions.find(t => t.id === 's5');
+    check('EX-46/47 — la date et le montant n\'ont pas changé, seul le mois comptable',
+      t.date === '2026-06-02' && t.amount === 250000 && t.monthOverride === '2026-05' &&
+      Engine.budgetMonth(t) === '2026-05');
+  }
+}
+
+/* ---- EX-43 : sur un livret, seul l'intérêt est un revenu ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'la', name: 'LA', type: 'livret', order: 0 });
+  S.transactions.push({ id: 'i1', accountId: 'la', date: '2026-01-02', amount: 1234, label: 'INTERETS 2025', hash: 'i1' });
+  S.transactions.push({ id: 'v1', accountId: 'la', date: '2026-01-10', amount: 50000, label: 'VERSEMENT', hash: 'v1' });
+  Rules.detectTransfers();
+  const t1 = S.transactions.find(t => t.id === 'i1');
+  const t2 = S.transactions.find(t => t.id === 'v1');
+  check('EX-43 — intérêts = revenu réel ; versement sur livret = neutre',
+    !t1.internal && t1.kind === 'interet' && t2.internal === true);
+}
+
+/* ---- EX-27 : deux opérations identiques le même jour ne sont pas confondues ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0, fingerprints: ['FR7611111111111'] });
+  const enc = new TextEncoder();
+  const csv = 'Compte : FR7611111111111\nDate;Libellé;Montant\n05/01/2026;CAFE DU COIN;-2,50\n05/01/2026;CAFE DU COIN;-2,50\n';
+  const s1 = await Importer.analyze([{ name: 'cc.csv', bytes: enc.encode(csv) }]);
+  Importer.apply(s1, {});
+  check('EX-27a — deux cafés identiques le même jour : les deux sont importés',
+    S.transactions.length === 2, `importées ${S.transactions.length}`);
+  const s2 = await Importer.analyze([{ name: 'cc.csv', bytes: enc.encode(csv) }]);
+  const r2 = Importer.apply(s2, {});
+  check('EX-27b — au réimport, aucun des deux n\'est dupliqué',
+    S.transactions.length === 2 && r2.added === 0, `total ${S.transactions.length}`);
+}
+
+/* ---- Archive « Relevé de tous comptes » : ZIP imbriqué + XLSX courtier ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.accounts.push({ id: 'la', name: 'LA', type: 'livret', order: 1 });
+  S.accounts.push({ id: 'rev', name: 'Revolut', type: 'courant', order: 2 });
+  S.accounts.push({ id: 'xeur', name: 'XTB EUR', type: 'titres', order: 3 });
+  S.accounts.push({ id: 'xpea', name: 'XTB PEA', type: 'pea', order: 4 });
+  let buf = null;
+  try {
+    const r = await fetch('_test-releve.zip');
+    if (r.ok) buf = new Uint8Array(await r.arrayBuffer());
+  } catch { /* archive d'exemple absente : test ignoré */ }
+  if (!buf) {
+    results.push({ name: 'Archive réelle — test ignoré (déposez _test-releve.zip à côté de tests.html)', ok: true });
+  } else {
+    const map = p => /Compte courant/.test(p) ? 'cc' : /Livret A/.test(p) ? 'la'
+      : /Revolut/.test(p) ? 'rev' : /EUR_/.test(p) ? 'xeur' : /PEA_/.test(p) ? 'xpea' : null;
+    const s1 = await Importer.analyze([{ name: 'Relevé de tous comptes.zip', bytes: buf }]);
+    check('ZIP imbriqué — les 5 relevés sont extraits et analysés sans erreur',
+      s1.files.length === 5 && s1.errors.length === 0,
+      `${s1.files.length} relevés, erreurs : ${s1.errors.join(' | ')}`);
+    const res = {};
+    s1.files.forEach(f => { if (!f.accountId) res[f.path] = map(f.path); });
+    const r1 = Importer.apply(s1, res);
+    check('Archive réelle — toutes les opérations importées, réparties sur 9 mois',
+      r1.added > 500 && new Set(S.transactions.map(t => U.monthOf(t.date))).size === 9,
+      `${r1.added} ajoutées`);
+    // Les positions XTB sont un instantané : lignes de synthèse ET lots
+    // présents, on ne doit pas les additionner.
+    const dcam = S.positionSnapshots.find(s => s.symbol === 'DCAM.FR');
+    check('XTB — instantané de positions non doublé (synthèse + lots)',
+      dcam && dcam.qty === 212, `DCAM.FR = ${dcam ? dcam.qty : 'absent'} (attendu 212)`);
+    check('XTB — valorisation du PEA conforme au rapport (1 949,23 € à un centime près)',
+      (() => { const v = Engine.positionsValue('xpea', '2026-08-06'); return Math.abs(v.value - 194923) <= 2; })(),
+      `obtenu ${Engine.positionsValue('xpea', '2026-08-06').value}`);
+    // Deuxième import de la même archive.
+    const before = S.transactions.length, snapBefore = JSON.stringify(S.positionSnapshots.map(s => [s.symbol, s.qty]));
+    const s2 = await Importer.analyze([{ name: 'Relevé de tous comptes.zip', bytes: buf }]);
+    check('Archive réelle — au 2e passage, chaque relevé retrouve seul son compte',
+      s2.files.every(f => f.accountId) &&
+      s2.files.find(f => /EUR_/.test(f.path)).accountId === 'xeur' &&
+      s2.files.find(f => /PEA_/.test(f.path)).accountId === 'xpea',
+      s2.files.map(f => `${f.path.split('/').pop().slice(0, 20)}→${f.accountId}`).join(', '));
+    const r2 = Importer.apply(s2, {});
+    check('Archive réelle — réimport : aucune opération ni position dupliquée',
+      r2.added === 0 && S.transactions.length === before &&
+      JSON.stringify(S.positionSnapshots.map(s => [s.symbol, s.qty])) === snapBefore,
+      `ajoutées ${r2.added}, total ${S.transactions.length}/${before}`);
+    // EX-25 : le relevé de compte courant contient « EPARGNE PEA », « VIREMENT
+    // LIVRET »… et reste pourtant attribué au compte courant.
+    /* ---- Arborescence de catégories et reconnaissance ---- */
+    const avantClass = S.transactions.filter(t => !t.lineId && !t.internal && t.amount < 0).length;
+    const bilan = ScreenBudget.installerModele();
+    const nbLignesAttendu = ScreenBudget.MODELE.reduce((s, c) => s + c.lignes.length, 0) +
+      ScreenBudget.MODELE_REVENUS.length;
+    check('Catégories — l\'arborescence proposée s\'installe et classe les opérations existantes',
+      bilan.categories === 6 && bilan.lignes === nbLignesAttendu &&
+      bilan.regles > 50 && bilan.classees > 150,
+      JSON.stringify(bilan) + ` (lignes attendues : ${nbLignesAttendu})`);
+    check('Catégories — le motif le plus long l\'emporte : « UBER EATS » ne tombe pas dans « Uber et taxi »',
+      (() => {
+        const ligneDe = (nom) => Engine.allLines().find(l => l.name === nom);
+        const livr = ligneDe('Livraison'), taxi = ligneDe('Uber et taxi');
+        const nLivr = S.transactions.filter(t => t.lineId === livr.id).length;
+        const nTaxi = S.transactions.filter(t => t.lineId === taxi.id).length;
+        return nLivr === 15 && nTaxi === 13 &&
+          S.transactions.filter(t => t.lineId === taxi.id).every(t => !/EATS/i.test(t.label));
+      })(),
+      'répartition Uber / Uber Eats');
+    // Les revenus se classent comme les dépenses : « Revenus » est la
+    // catégorie, ces lignes en sont les sous-catégories.
+    check('Revenus — les lignes de revenus sont créées et reconnaissent les motifs du relevé',
+      S.budget.incomes.length === ScreenBudget.MODELE_REVENUS.length &&
+      S.budget.incomes.some(l => l.name === 'Loyers perçus') &&
+      S.budget.incomes.some(l => l.name === 'Intérêts et dividendes') &&
+      (() => {
+        const loyers = S.budget.incomes.find(l => l.name === 'Loyers perçus');
+        const n = S.transactions.filter(t => t.lineId === loyers.id).length;
+        return n >= 6 && S.transactions.filter(t => t.lineId === loyers.id).every(t => t.amount > 0);
+      })(),
+      S.budget.incomes.map(l => l.name).join(', '));
+    check('Revenus — un revenu classé à la main entraîne les autres du même émetteur',
+      (() => {
+        const salaires = S.budget.incomes.find(l => l.name === 'Salaires et honoraires');
+        const emetteur = S.transactions.filter(t => /NOACHOVITCH/i.test(t.label));
+        if (emetteur.length < 3) return false;
+        const cible = emetteur[0];
+        cible.lineId = salaires.id; cible.auto = false;
+        const cle = Rules.merchantKey(cible.label);
+        Rules.addRule(cle, salaires.id);
+        Rules.applyToUncategorized(cle, salaires.id, { exceptId: cible.id });
+        return emetteur.every(t => t.lineId === salaires.id);
+      })());
+    check('Catégories — réinstaller ne crée aucun doublon',
+      (() => {
+        const b2 = ScreenBudget.installerModele();
+        return b2.categories === 0 && b2.lignes === 0 && b2.regles === 0;
+      })());
+    // Une sous-catégorie doit pouvoir changer de catégorie sans orpheliner
+    // ses opérations (EX-17) : son identifiant ne change pas.
+    {
+      const b = S.budget;
+      const alim = b.categories.find(c => c.name === 'Alimentation');
+      const loisirs = b.categories.find(c => c.name === 'Loisirs');
+      const ligne = alim.lines.find(l => l.name === 'Livraison');
+      const nOps = S.transactions.filter(t => t.lineId === ligne.id).length;
+      alim.lines.splice(alim.lines.findIndex(x => x.id === ligne.id), 1);
+      loisirs.lines.push(ligne);
+      check('EX-17 — déplacer une sous-catégorie d\'une catégorie à l\'autre n\'orpheline aucune opération',
+        S.transactions.filter(t => t.lineId === ligne.id).length === nOps && nOps > 0 &&
+        Engine.budgetLine(ligne.id).category.name === 'Loisirs',
+        `${nOps} opérations`);
+      loisirs.lines.pop();
+      alim.lines.push(ligne);
+    }
+    /* ---- EX-36 : une correction manuelle se propage d'elle-même ---- */
+    {
+      const courses = Engine.allLines().find(l => l.name === 'Courses');
+      const restos = Engine.allLines().find(l => l.name === 'Restaurants');
+      S.rules = S.rules.filter(x => x.pattern !== 'FRANPRIX');
+      for (const t of S.transactions) if (/FRANPRIX/i.test(t.label)) { t.lineId = null; t.auto = undefined; }
+      const franprix = S.transactions.filter(t => /FRANPRIX/i.test(t.label));
+      check('Reconnaissance — la clé du commerçant ignore les mots vides du relevé',
+        Rules.merchantKey('FRANPRIX                  LE 28/07/26') === 'FRANPRIX',
+        Rules.merchantKey('FRANPRIX                  LE 28/07/26'));
+      // Un témoin délibérément classé ailleurs ne doit jamais être réécrit (P7).
+      const temoin = franprix[5];
+      temoin.lineId = restos.id; temoin.auto = false;
+      const cible = franprix[0];
+      cible.lineId = courses.id; cible.auto = false;
+      Rules.addRule('FRANPRIX', courses.id);
+      const touchees = Rules.applyToUncategorized('FRANPRIX', courses.id, { exceptId: cible.id });
+      check('EX-36 — classer une opération classe toutes les autres du même commerçant restées sans catégorie',
+        touchees.length === franprix.length - 2 &&
+        franprix.filter(t => t.lineId === courses.id).length === franprix.length - 1,
+        `${touchees.length} touchées sur ${franprix.length}`);
+      check('P7 — une opération déjà classée ailleurs n\'est jamais réécrite en silence',
+        Engine.budgetLine(temoin.lineId).line.name === 'Restaurants');
+      check('EX-36 — la règle vaut aussi pour les imports à venir',
+        Store.state.rules.some(r => r.pattern === 'FRANPRIX' && r.lineId === courses.id));
+      // Retour en arrière possible : automatique ne veut pas dire irréversible.
+      for (const id of touchees) {
+        const x = S.transactions.find(t => t.id === id);
+        if (x) { x.lineId = null; x.auto = undefined; }
+      }
+      check('P7 — le classement automatique est annulable sans toucher au choix manuel',
+        franprix.filter(t => !t.lineId).length === franprix.length - 2 &&
+        Engine.budgetLine(cible.lineId).line.name === 'Courses' &&
+        Engine.budgetLine(temoin.lineId).line.name === 'Restaurants');
+    }
+    /* ---- Ne pas généraliser sans preuve de régularité (EX-114) ---- */
+    {
+      // Recalage : une ligne vue une seule fois ne doit produire AUCUN
+      // prévisionnel mensuel. C'est la faute signalée : un remboursement
+      // ponctuel devenait un revenu récurrent.
+      const prev = Rules.recalibrationPreview();
+      const nomsPonct = prev.ponctuelles.map(p => p.name);
+      check('EX-114 — une ligne sporadique ne reçoit aucun montant mensuel proposé',
+        prev.ponctuelles.length > 0 &&
+        prev.ponctuelles.every(p => p.proposed === 0 && p.monthsWithData < prev.seuil) &&
+        prev.lines.every(p => p.monthsWithData >= prev.seuil),
+        `ponctuelles : ${nomsPonct.slice(0, 4).join(', ')}`);
+      check('Recalage — le montant proposé est la médiane, pas la moyenne : un mois exceptionnel ne le déforme plus',
+        prev.lines.every(p => p.proposed === (p.niveau && p.niveau.certain ? p.niveau.recent : U.median(p.parMois))));
+      check('Recalage — chaque ligne porte son détail mois par mois, la proposition est vérifiable',
+        prev.lines.every(p => p.parMois.length === prev.months.length) &&
+        prev.ponctuelles.every(p => p.parMois.length === prev.months.length));
+      // Un montant corrigé à la main dans l'aperçu prime sur la proposition.
+      if (prev.lines.length) {
+        const p0 = prev.lines[0];
+        Rules.applyRecalibration(prev, [p0.lineId], { [p0.lineId]: 123456 });
+        check('Recalage — le montant reste modifiable : la proposition n\'est qu\'une proposition',
+          Engine.allLines().find(l => l.id === p0.lineId).amount === 123456);
+      }
+    }
+    {
+      // Changement de niveau : deux mois au nouveau palier suffisent à
+      // proposer le récent ; un seul est signalé sans trancher.
+      const b = S.budget;
+      const cat = b.categories[0];
+      const ligne = { id: U.uid(), name: 'Palier test', amount: 0 };
+      cat.lines.push(ligne);
+      const mois = Rules.recalibrationPreview().months;
+      const poser = (m, montant) => S.transactions.push({ id: U.uid(), accountId: S.accounts[0].id,
+        date: U.monthEnd(m), amount: -montant, label: 'PALIER TEST', lineId: ligne.id, auto: false, hash: U.uid() });
+      mois.slice(0, -2).forEach(m => poser(m, 60000));
+      mois.slice(-2).forEach(m => poser(m, 110000));
+      const p = Rules.recalibrationPreview().lines.find(x => x.lineId === ligne.id);
+      check('Recalage — un changement de niveau confirmé sur deux mois est proposé au niveau récent',
+        p && p.niveau && p.niveau.certain && p.proposed === 110000,
+        p ? `proposé ${p.proposed}, niveau ${JSON.stringify(p.niveau)}` : 'ligne absente');
+      S.transactions = S.transactions.filter(t => t.lineId !== ligne.id);
+      cat.lines.pop();
+    }
+    {
+      // Commerçant polyvalent : deux classements manuels différents pour le
+      // même libellé doivent stopper toute généralisation.
+      const b = S.budget;
+      const cadeaux = Engine.allLines().find(l => l.name === 'Cadeaux et dons');
+      const perso = Engine.allLines().find(l => l.name === 'Vêtements');
+      const amazon = S.transactions.filter(t => /AMAZON/i.test(t.label));
+      const cle = amazon.length ? Rules.merchantKey(amazon[0].label) : null;
+      check('Commerçant polyvalent — le jeu de données contient bien des opérations Amazon',
+        amazon.length >= 2 && !!cle, `${amazon.length} opérations, clé ${cle}`);
+      if (amazon.length >= 2 && cadeaux && perso) {
+        // 1er classement : la règle se crée et se propage normalement.
+        amazon[0].lineId = cadeaux.id; amazon[0].auto = false;
+        Rules.addRule(cle, cadeaux.id);
+        Rules.applyToUncategorized(cle, cadeaux.id, { exceptId: amazon[0].id });
+        // 2e classement, contradictoire : le commerçant devient équivoque.
+        amazon[1].lineId = perso.id; amazon[1].auto = false;
+        // Ce qui reste classé PAR LA RÈGLE, donc défaisable sans perdre de choix.
+        const parRegle = amazon.filter(t => t.auto === 'rule' && t.lineId === cadeaux.id).length;
+        const conflits = Rules.classementsManuels(cle, amazon[1].id);
+        check('EX-114 — la contradiction est détectée : ce libellé a déjà été classé ailleurs',
+          conflits.includes(cadeaux.id), JSON.stringify(conflits));
+        const remis = Rules.marquerEquivoque(cle);
+        for (const r of remis) {
+          const x = S.transactions.find(x => x.id === r.id);
+          if (x) { x.lineId = null; x.auto = undefined; }
+        }
+        check('EX-114 — la règle est retirée et les classements automatiques sont défaits',
+          Rules.estEquivoque(cle) && !S.rules.some(r => r.pattern === cle && r.lineId) &&
+          remis.length === parRegle && parRegle > 0,
+          `${remis.length} remises à classer sur ${parRegle} classées par la règle`);
+        check('EX-114 — les classements manuels sont préservés, seuls les automatiques sont défaits',
+          amazon[0].lineId === cadeaux.id && amazon[1].lineId === perso.id);
+        check('EX-114 — plus aucune généralisation sur ce commerçant, ni règle ni supposition',
+          Rules.applyToUncategorized(cle, cadeaux.id).length === 0 &&
+          (() => { const n = Rules.categorizeAll();
+            return !S.transactions.some(t => /AMAZON/i.test(t.label) && t.auto === 'guess'); })());
+        // Le caractère interne, lui, ne dépend pas de la nature de l'achat.
+        const avantCat = new Map(amazon.map(t => [t.id, t.lineId]));
+        const touchees = Rules.applyToUncategorized(cle, cadeaux.id, { internal: true });
+        check('EX-114 — le caractère interne reste propageable : il ne dépend pas de la nature de l\'achat',
+          touchees.length > 0 &&
+          S.transactions.filter(t => touchees.includes(t.id)).every(t => t.internal) &&
+          // et il n'a rangé personne dans une catégorie au passage
+          amazon.every(t => t.lineId === avantCat.get(t.id)),
+          `${touchees.length} marquées internes`);
+        for (const id of touchees) {
+          const x = S.transactions.find(x => x.id === id);
+          if (x) { x.internal = false; delete x.internalBy; }
+        }
+        Rules.reconnaitreUnivoque(cle);
+        for (const t of amazon) { t.lineId = null; t.auto = undefined; }
+        S.rules = S.rules.filter(r => r.pattern !== cle);
+      }
+    }
+
+    /* ---- Reconnaissance par mots, et non par sous-chaîne ---- */
+    {
+      check('Reconnaissance — un mot vide intercalé n\'empêche plus la correspondance',
+        Rules.matches('Transfer to Revolut Digital Assets Europe Ltd', 'TRANSFER REVOLUT DIGITAL') &&
+        Rules.merchantKey('Transfer to Revolut Digital Assets Europe Ltd') === 'TRANSFER REVOLUT DIGITAL');
+      check('Reconnaissance — un motif ne se déclenche pas sur un mot qui le contient',
+        !Rules.matches('SUPER U ESSONNE', 'ESSO') && Rules.matches('STATION ESSO A6', 'ESSO'));
+      check('Reconnaissance — l\'ordre des mots compte',
+        Rules.matches('UBER EATS PARIS', 'UBER EATS') && !Rules.matches('EATS UBER', 'UBER EATS'));
+
+      // Marquer une opération « interne » doit s'apprendre et se rejouer (P6).
+      const cibles = S.transactions.filter(t => /Revolut Digital/i.test(t.label));
+      const ligne = { id: U.uid(), name: 'Conversion BTC', amount: 0, accountId: S.accounts[0].id };
+      S.budget.savings.push(ligne);
+      const t0 = cibles[0];
+      t0.lineId = ligne.id; t0.auto = false; t0.internal = true; t0.internalLocked = true;
+      const cle = Rules.merchantKey(t0.label);
+      Rules.addRule(cle, ligne.id, null, { internal: true });
+      Rules.applyToUncategorized(cle, ligne.id, { exceptId: t0.id, internal: true });
+      check('EX-36/P6 — marquer une opération interne le propage à toutes ses semblables',
+        cibles.length > 50 && cibles.every(t => t.internal && t.lineId === ligne.id),
+        `${cibles.filter(t => t.internal).length}/${cibles.length} internes, ` +
+        `${cibles.filter(t => t.lineId === ligne.id).length} classées`);
+      // Rejouer doit laisser ces opérations exactement dans le même état :
+      // la règle a été apprise, elle ne se contredit pas elle-même.
+      const avant = cibles.map(t => `${t.internal}|${t.lineId}`).join(';');
+      Rules.detectTransfers();
+      Rules.categorizeAll();
+      const apres = cibles.map(t => `${t.internal}|${t.lineId}`).join(';');
+      check('EX-44 — rejouer la reconnaissance laisse ces opérations inchangées : la règle est apprise',
+        avant === apres && cibles.every(t => t.internal && t.lineId === ligne.id),
+        `${cibles.filter(t => t.internal).length}/${cibles.length} encore internes`);
+      S.budget.savings.pop();
+      S.rules = S.rules.filter(r => r.pattern !== cle);
+      for (const t of cibles) { t.lineId = null; t.auto = undefined; delete t.internalLocked; }
+    }
+
+    /* ---- Une catégorie sans sous-catégorie doit pouvoir en recevoir une ---- */
+    {
+      S.budget.categories.push({ id: 'catvide', name: 'Dépenses courantes', lines: [] });
+      const root = document.createElement('div');
+      root.innerHTML = UI.catLineSelect('t-cat', 't-line', null);
+      document.body.appendChild(root);
+      root.querySelector('#t-cat').value = 'catvide';
+      UI.wireCatLine(root, 't-cat', 't-line');
+      root.querySelector('#t-cat').onchange();
+      const opts = [...root.querySelector('#t-line').options].map(o => o.value);
+      check('Catégorie vide — le formulaire propose de créer la sous-catégorie manquante',
+        opts.includes(UI.NOUVELLE) && root.querySelector('#t-line').value === UI.NOUVELLE,
+        opts.join(','));
+      const vraiPrompt = window.prompt;
+      window.prompt = () => 'Divers';
+      const id = UI.resolveCatLine(root, 't-cat', 't-line');
+      window.prompt = () => '';
+      const abandon = UI.resolveCatLine(root, 't-cat', 't-line');
+      window.prompt = vraiPrompt;
+      const cat = S.budget.categories.find(c => c.id === 'catvide');
+      check('Catégorie vide — choisir la catégorie rattache bien l\'opération, plus de « sans catégorie »',
+        typeof id === 'string' && cat.lines.length === 1 && cat.lines[0].name === 'Divers' &&
+        Engine.budgetLine(id).category.name === 'Dépenses courantes',
+        `id=${id}, lignes=${cat.lines.map(l => l.name)}`);
+      check('Catégorie vide — renoncer à nommer n\'enregistre rien et ne perd pas la saisie',
+        abandon === false && cat.lines.length === 1);
+      root.remove();
+      S.budget.categories = S.budget.categories.filter(c => c.id !== 'catvide');
+    }
+
+    /* ---- Le prévisionnel ne vaut que pour le mois en cours ---- */
+    {
+      const app = document.createElement('div');
+      app.innerHTML = `<div id="screen-title"></div><div id="content-inner"></div>`;
+      document.body.appendChild(app);
+      const rendre = (mois) => {
+        S.ui.period = { kind: 'month', month: mois };
+        ScreenMois.render();
+        return {
+          entetes: [...document.querySelectorAll('#mois-exp th')].map(e => e.textContent.trim()),
+          notice: !!document.querySelector('#content-inner .notice'),
+          drills: document.querySelectorAll('#mois-exp [data-drill]').length,
+        };
+      };
+      const courant = rendre(U.currentMonth());
+      check('Mois en cours — le prévisionnel est confronté au réel',
+        courant.entetes.includes('Prévu') && courant.entetes.includes('Écart') &&
+        courant.entetes.includes('Consommation'),
+        courant.entetes.join(' | '));
+      const passe = rendre(U.addMonths(U.currentMonth(), -2));
+      check('Mois révolu — aucune colonne de prévisionnel, le mois précédent sert de repère',
+        !passe.entetes.includes('Prévu') && !passe.entetes.includes('Écart') &&
+        !passe.entetes.includes('Consommation') && passe.entetes.includes('Réel') &&
+        passe.entetes.includes('Variation'),
+        passe.entetes.join(' | '));
+      check('Mois révolu — l\'absence du prévisionnel est annoncée, pas subie',
+        passe.notice);
+      check('Mois révolu — le détail des opérations reste ouvrable',
+        passe.drills > 0, `${passe.drills} lignes cliquables`);
+      // Les lignes sans mouvement sont repliées : moins de défilement pour
+      // la même information.
+      ScreenMois.montrerVides = false;
+      const replie = rendre(U.addMonths(U.currentMonth(), -2));
+      const nReplie = document.querySelectorAll('#mois-exp tr').length;
+      ScreenMois.montrerVides = true;
+      rendre(U.addMonths(U.currentMonth(), -2));
+      const nDeplie = document.querySelectorAll('#mois-exp tr').length;
+      ScreenMois.montrerVides = false;
+      rendre(U.addMonths(U.currentMonth(), -2));   // revenir à l'état replié
+      check('Affichage — les lignes sans mouvement sont repliées',
+        nReplie < nDeplie, `${nReplie} lignes repliées / ${nDeplie} dépliées`);
+      check('Affichage — le nombre de lignes masquées est annoncé, elles ne disparaissent pas en silence',
+        /Afficher \d+ ligne/.test(document.getElementById('mois-toggle-vides').textContent),
+        document.getElementById('mois-toggle-vides').textContent);
+      // L'ordre des sections : revenus d'abord, mouvements internes en dernier.
+      const ordre = [...document.querySelectorAll('#content-inner .card h2')]
+        .map(h => h.textContent.trim().split('—')[0].trim());
+      check('Affichage — revenus en premier, dépenses ensuite, mouvements internes en dernier',
+        ordre.indexOf('Revenus') < ordre.indexOf('Dépenses par catégorie') &&
+        ordre.indexOf('Dépenses par catégorie') < ordre.indexOf('Mouvements internes') &&
+        ordre.indexOf('Mouvements internes') === ordre.length - 1,
+        ordre.join(' | '));
+      app.remove();
+    }
+
+    /* ---- Capacité d'épargne déduite (EX-56) ---- */
+    {
+      const prev = ScreenPatrimoine.capacitePrevisionnelle();
+      const b = S.budget;
+      check('EX-56 — la capacité prévisionnelle vaut revenus prévus moins dépenses prévues',
+        prev.montant === prev.revenus - prev.depenses &&
+        prev.revenus === U.sum(b.incomes, l => l.amount || 0) &&
+        prev.depenses === U.sum(b.categories, c => U.sum(c.lines, l => l.amount || 0)),
+        JSON.stringify(prev));
+      const reel = ScreenPatrimoine.capaciteReelle();
+      check('EX-56 — la capacité constatée exclut le mois en cours et se moyenne sur les mois complets',
+        reel && !reel.mois.includes(U.currentMonth()) && reel.mois.length > 1 &&
+        reel.montant === U.roundCents(reel.revenus - reel.depenses),
+        JSON.stringify(reel && reel.mois));
+      // L'épargne déjà versée ne doit pas compter comme une dépense : sinon
+      // le même euro serait retiré deux fois.
+      const ligneEp = { id: U.uid(), name: 'Test épargne', amount: 0, accountId: 'cc' };
+      b.savings.push(ligneEp);
+      const victime = S.transactions.find(t => t.amount < 0 && !t.internal &&
+        Engine.budgetMonth(t) < U.currentMonth() && reel.mois.includes(Engine.budgetMonth(t)));
+      const ancienne = victime.lineId;
+      victime.lineId = ligneEp.id;
+      const apres = ScreenPatrimoine.capaciteReelle();
+      check('EX-56 — l\'épargne déjà versée n\'est pas comptée comme une dépense',
+        apres.depenses < reel.depenses && apres.epargneDejaVersee > 0 &&
+        apres.montant > reel.montant,
+        `dépenses ${reel.depenses} → ${apres.depenses}, épargne repérée ${apres.epargneDejaVersee}`);
+      victime.lineId = ancienne;
+      b.savings.pop();
+    }
+    check('EX-25 — les libellés d\'opérations ne détournent aucun fichier',
+      S.transactions.filter(t => t.accountId === 'cc').length > 200 &&
+      S.transactions.filter(t => t.accountId === 'la').length < 20);
+    // EX-111 : l'argent versé mais pas encore investi appartient au patrimoine.
+    check('EX-111 — sans solde espèces certifié, le compte est signalé, jamais affiché à zéro',
+      Engine.accountsWithUnknownCash().some(a => a.id === 'xpea') &&
+      Engine.accountValue('xpea', U.today()).cashKnown === false);
+    const especes = Engine.cashFlowTotal('xpea');
+    S.certifications.push({ id: 'cert', accountId: 'xpea', date: U.today(), balance: especes });
+    Engine.invalidate();
+    const vp = Engine.accountValue('xpea', U.today());
+    check('EX-111 — une fois certifiées, les liquidités non investies entrent dans le patrimoine',
+      vp.cashKnown && vp.cash === 76885 && vp.total === 271807,
+      `espèces ${vp.cash}, total ${vp.total} (attendu 76885 / 271807)`);
+    // EX-6 : cet argent ne doit jamais passer pour investi.
+    const cls = Engine.allocationByClass(U.today());
+    check('EX-6 — ces espèces sont classées à part, jamais comptées en actions',
+      cls.get('Espèces sur comptes-titres') === 76885 && cls.get('Actions') === 194922,
+      [...cls.entries()].map(([k, v]) => `${k}=${v}`).join(' '));
+
+    /* ---- Exposition géographique par transparence des ETF (EX-5) ---- */
+    // Déduction automatique : les trois ETF du PEA doivent être rattachés à
+    // leur indice à l'import, sans aucune saisie.
+    check('Géographie déduite — les 3 ETF sont rattachés à leur indice dès l\'import, sans saisie',
+      S.geoSource['DCAM.FR'] === 'deduit' && S.geoIndice['DCAM.FR'] === 'MSCI World' &&
+      S.geoIndice['C50.FR'] === 'Euro Stoxx 50' &&
+      S.geoIndice['PAEEM.FR'] === 'MSCI Emerging Markets' &&
+      Indices.nonDeduits().length === 0,
+      JSON.stringify(S.geoIndice));
+    // Une correction manuelle prime et n'est jamais réécrasée (P6, P7).
+    S.geo['C50.FR'] = { 'France': 0.5, 'Allemagne': 0.5 };
+    S.geoSource['C50.FR'] = 'manuel';
+    Indices.applyAll();
+    check('Géographie déduite — une correction manuelle n\'est jamais réécrasée',
+      S.geoSource['C50.FR'] === 'manuel' && S.geo['C50.FR']['France'] === 0.5,
+      JSON.stringify(S.geo['C50.FR']));
+    // « Relancer la déduction » force le retour à l'indice, explicitement.
+    Indices.applyAll({ force: true });
+    check('Géographie déduite — la relance explicite reprend la main sur la déduction',
+      S.geoSource['C50.FR'] === 'deduit' && S.geo['C50.FR']['Pays-Bas'] > 0,
+      JSON.stringify(S.geo['C50.FR']));
+    check('Géographie déduite — un support inconnu n\'invente aucune répartition',
+      Indices.deduce('ZZZZ.XX', 'Fonds obscur sans indice') === null);
+    // Le nom lisible des fonds vient du rapport du courtier.
+    check('XTB — le nom lisible des fonds est repris du rapport',
+      S.priceMeta['DCAM.FR'] && /MSCI World/i.test(S.priceMeta['DCAM.FR'].name || ''),
+      JSON.stringify(Object.entries(S.priceMeta).map(([k, v]) => `${k}=${v.name}`)));
+    const geo = Engine.geoExposure(U.today());
+    const sommeGeo = U.sum([...geo.expo.values()]);
+    check('Exposition géographique — la somme des régions égale EXACTEMENT la part investie',
+      sommeGeo === 194922 && geo.inconnus.length === 0,
+      `${sommeGeo} vs 194922`);
+    check('Exposition géographique — les pays se regroupent en continents cohérents, sans perte',
+      geo.continents.get('Amérique du Nord') > geo.continents.get('Europe') &&
+      geo.continents.get('Europe') > geo.continents.get('Marchés émergents') &&
+      U.sum([...geo.continents.values()]) === sommeGeo,
+      [...geo.continents.entries()].map(([k, v]) => `${k}=${v}`).join(' '));
+    // EX-5 : la vue par transparence doit dire ce que la part investie pèse
+    // dans le patrimoine — c'est désormais la carte géographique qui le porte.
+    check('EX-5 — la vue par transparence indique la proportion du patrimoine qu\'elle représente',
+      geo.share > 0 && geo.share <= 1 &&
+      Math.abs(geo.share - geo.invested / Engine.netWorth(U.today()).total) < 1e-9,
+      `part = ${geo.share}`);
+    check('Exposition géographique — une région inconnue tombe dans « Autres », jamais dans un continent au hasard',
+      Engine.continentOf('Vulcain') === 'Autres' &&
+      Engine.continentOf('États-Unis') === 'Amérique du Nord' &&
+      Engine.continentOf('Taïwan') === 'Marchés émergents');
+  }
+}
+
+/* ---- EX-64 : amortissement d'un crédit ---- */
+{
+  const S = fresh();
+  const credit = { id: 'k', name: 'K', principal: 1000000, annualRate: 0.03, monthlyPayment: 100000, startDate: '2026-01-05', months: 12 };
+  S.credits.push(credit);
+  const r0 = Engine.creditRemaining(credit, '2026-01-04');
+  const r1 = Engine.creditRemaining(credit, '2026-02-10');
+  check('EX-64 — capital restant dû : plein avant départ, amorti ensuite',
+    r0 === 0 && r1 === 1000000 + 2500 - 100000, `r1=${r1}`);
+}
+
+} catch (e) {
+  results.push({ name: 'EXCEPTION PENDANT LES TESTS', ok: false, detail: e.stack || e.message });
+}
+
+const okAll = results.every(r => r.ok);
+document.getElementById('out').innerHTML =
+  `<p class="${okAll ? 'ok' : 'ko'}">${results.filter(r => r.ok).length}/${results.length} tests passés</p>` +
+  results.map(r => `<div class="${r.ok ? 'ok' : 'ko'}">${r.ok ? '✔' : '✘'} ${r.name}` +
+    (r.ok ? '' : `<pre>${r.detail}</pre>`) + `</div>`).join('');
+document.title = (okAll ? 'OK — ' : 'ÉCHECS — ') + document.title;
+})();
+</script>
+</body>
+</html>
