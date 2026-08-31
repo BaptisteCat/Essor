@@ -50,7 +50,13 @@ const Banque = {
     let data;
     try { data = JSON.parse(texte); } catch { data = { brut: texte }; }
     if (!r.ok) {
-      const e = new Error(data.erreur || data.message || `réponse ${r.status} du service bancaire`);
+      // Un 404 sans corps JSON, c'est Cloudflare qui dit « rien ici » : le
+      // relais ne vit pas à cette adresse — souvent un ancien nom de Worker.
+      const message = data.erreur || data.message ||
+        (r.status === 404 && data.brut != null
+          ? 'aucun relais à cette adresse — vérifiez-la dans le tableau de bord Cloudflare (le nom du Worker fait l’adresse)'
+          : `réponse ${r.status} du service bancaire`);
+      const e = new Error(message);
       e.code = r.status;
       throw e;
     }

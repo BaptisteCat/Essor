@@ -181,8 +181,10 @@ Mise en place (~30 minutes, une fois) :
    `EB_APP_ID` (l'identifiant d'application Enable Banking), `EB_CLE_PRIVEE`
    (tout le contenu du fichier .pem, en-têtes compris) et `RELAIS_CLE` (un mot
    de passe long que vous inventez). La variable `ORIGINES` est déjà posée par
-   la configuration. L'adresse `https://essor-relais.….workers.dev` est celle
-   du relais. (L'ancienne voie — créer un Worker vierge et coller le code —
+   la configuration. L'adresse du relais est
+   `https://<nom-de-l'application>.<votre-compte>.workers.dev` — elle s'affiche
+   sur la page du Worker après le premier déploiement ; c'est elle, exactement,
+   qu'il faut coller dans Essor. (L'ancienne voie — créer un Worker vierge et coller le code —
    fonctionne aussi si votre tableau de bord la propose.)
 3. **Essor** — Réglages → Connexion bancaire : collez l'adresse du relais et
    la `RELAIS_CLE`, puis « Autoriser cette banque… ». La page part chez la

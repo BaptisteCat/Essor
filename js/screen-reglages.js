@@ -208,7 +208,7 @@ const ScreenReglages = {
             Synchronisation automatique à l'ouverture</label></div>
           <div class="hint">Dernière synchronisation : ${U.escapeHtml(Banque.derniereMaj())}.</div>
         </div>
-        ${sessions || '<div class="empty">Aucune banque autorisée pour l\\u2019instant.</div>'}
+        ${sessions || '<div class="empty">Aucune banque autorisée pour l’instant.</div>'}
       ` : ''}`;
 
     const champCle = document.getElementById('bq-cle');
@@ -219,7 +219,7 @@ const ScreenReglages = {
       b.cle = document.getElementById('bq-cle').value.trim();
       if (!b.relais || !b.cle) { UI.error('Adresse ou clé du relais manquante.', 'Les deux se trouvent dans votre Worker Cloudflare.'); return; }
       try { await Banque.appel('/aspsps?country=FR'); }
-      catch (ex) { UI.error(`Le relais ne répond pas : ${ex.message}.`, 'Vérifiez l\\u2019adresse, la clé, et que le Worker est déployé.'); return; }
+      catch (ex) { UI.error(`Le relais ne répond pas : ${ex.message}.`, "Vérifiez l’adresse, la clé, et que le Worker est déployé."); return; }
       Store.markDirty();
       UI.toast('Relais connecté. Autorisez maintenant votre première banque.');
       ScreenReglages.renderBanque();
