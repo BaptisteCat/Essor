@@ -172,12 +172,18 @@ Mise en place (~30 minutes, une fois) :
    - **redirect URL** : `https://VOTRE-COMPTE.github.io/Essor/` — exactement
      l'adresse de l'application, barre finale comprise ;
    - téléchargez la **clé privée** (fichier PEM) et notez l'**application ID**.
-2. **Cloudflare** — dash.cloudflare.com → Workers & Pages → *Create Worker* ;
-   collez le contenu de `relais-cloudflare.js` (à la racine du dépôt de
-   l'application). Dans Settings → Variables, créez les secrets `EB_APP_ID`,
-   `EB_CLE_PRIVEE` (tout le PEM), `RELAIS_CLE` (un mot de passe long que vous
-   inventez) et la variable `ORIGINES` (`https://VOTRE-COMPTE.github.io`).
-   Déployez : l'adresse `https://….workers.dev` est celle du relais.
+2. **Cloudflare** — dash.cloudflare.com → Workers & Pages → créer une
+   application → **importer un dépôt GitHub** → choisissez le dépôt de
+   l'application (`Essor`). Cloudflare y trouve `wrangler.toml` et déploie
+   `relais-cloudflare.js` tout seul — et le redéploiera à chaque mise à jour
+   du dépôt. Une fois le premier déploiement passé, ouvrez l'application
+   déployée → **Settings → Variables and Secrets** et créez trois **secrets** :
+   `EB_APP_ID` (l'identifiant d'application Enable Banking), `EB_CLE_PRIVEE`
+   (tout le contenu du fichier .pem, en-têtes compris) et `RELAIS_CLE` (un mot
+   de passe long que vous inventez). La variable `ORIGINES` est déjà posée par
+   la configuration. L'adresse `https://essor-relais.….workers.dev` est celle
+   du relais. (L'ancienne voie — créer un Worker vierge et coller le code —
+   fonctionne aussi si votre tableau de bord la propose.)
 3. **Essor** — Réglages → Connexion bancaire : collez l'adresse du relais et
    la `RELAIS_CLE`, puis « Autoriser cette banque… ». La page part chez la
    banque (authentification forte), revient, et vous rattachez chaque compte

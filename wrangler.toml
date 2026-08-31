@@ -1,0 +1,18 @@
+# Essor — configuration du relais bancaire pour Cloudflare Workers.
+#
+# Ce fichier permet à Cloudflare de déployer le relais directement depuis le
+# dépôt GitHub : Workers & Pages → créer une application → importer ce dépôt.
+# Cloudflare détecte cette configuration et déploie relais-cloudflare.js ;
+# chaque mise à jour du dépôt redéploie le relais automatiquement.
+#
+# Les secrets (EB_APP_ID, EB_CLE_PRIVEE, RELAIS_CLE) ne vivent JAMAIS ici —
+# ils se saisissent dans le tableau de bord : l'application déployée →
+# Settings → Variables and Secrets.
+
+name = "essor-relais"
+main = "relais-cloudflare.js"
+compatibility_date = "2026-08-01"
+
+[vars]
+# L'origine autorisée à appeler le relais (modifiable dans le tableau de bord).
+ORIGINES = "https://baptistecat.github.io"
