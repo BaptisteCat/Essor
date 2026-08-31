@@ -63,6 +63,7 @@ export default {
     const origine = req.headers.get('Origin') || '';
     const cors = corsEntetes(env, origine);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    const url = new URL(req.url);
 
     // Point de santé, public : dit ce qui est configuré, jamais les valeurs.
     // C'est ce qui permet de distinguer « secret absent » de « clé différente »
@@ -83,7 +84,6 @@ export default {
         { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } });
     }
 
-    const url = new URL(req.url);
     if (!CHEMINS.test(url.pathname)) {
       return new Response(JSON.stringify({ erreur: 'chemin non autorisé' }),
         { status: 403, headers: { ...cors, 'Content-Type': 'application/json' } });
