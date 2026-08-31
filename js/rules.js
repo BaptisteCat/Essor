@@ -263,6 +263,35 @@ const Rules = {
       }
     }
 
+    // 2 bis. Virement vers (ou depuis) un de MES comptes, vu d'une seule
+    //    face : le relevé de l'autre compte n'est pas encore importé, mais le
+    //    libellé le NOMME — « VIR SEPA XTB » quand un compte s'appelle
+    //    « PEA XTB ». Compter ce débit en dépense minorait la capacité
+    //    d'épargne du montant exact de chaque versement ; l'argent n'est pas
+    //    dépensé, il a changé de poche. Deux garde-fous : le libellé doit
+    //    ressembler à un virement, et le mot retenu doit être distinctif —
+    //    « COMPTE » ou « LIVRET » ne désignent personne.
+    const GENERIQUES = new Set(['COMPTE', 'COURANT', 'LIVRET', 'BANQUE', 'EPARGNE',
+      'ASSURANCE', 'VIE', 'CARTE', 'PORTEFEUILLE', 'PRINCIPAL', 'JOINT', 'PERSO',
+      'MON', 'MES', 'THE', 'AND', 'INVEST']);
+    const motsComptes = [];
+    for (const a of S.accounts) {
+      if (a.closed) continue;
+      for (const mot of U.normLabel(a.name).split(' ')) {
+        if (mot.length >= 3 && !GENERIQUES.has(mot)) motsComptes.push({ mot, accountId: a.id });
+      }
+      for (const fp of a.fingerprints || []) {
+        if (fp.length >= 4) motsComptes.push({ mot: fp.toUpperCase(), accountId: a.id });
+      }
+    }
+    for (const t of S.transactions) {
+      if (t.internal || t.internalLocked) continue;
+      if (!Rules._looksLikeTransfer(t)) continue;
+      const lib = U.normLabel(t.label);
+      const vise = motsComptes.find(m => m.accountId !== t.accountId && lib.includes(m.mot));
+      if (vise) { t.internal = true; t.internalBy = 'vers-mes-comptes'; n++; }
+    }
+
     // 3. Appariement : même montant en sens inverse sur deux comptes distincts
     //    à ≤ 4 jours — le virement vu des deux côtés compte une fois (EX-41).
     const unpaired = S.transactions.filter(t => !t.pairId);

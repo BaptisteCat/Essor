@@ -693,6 +693,41 @@ try {
     bac.remove();
   }
 
+  /* ---- Virement vers mes propres comptes, vu d'une seule face ---- */
+  {
+    const S = fresh();
+    S.accounts.push({ id: 'cc', name: 'Compte courant BRED', type: 'courant', order: 0 });
+    S.accounts.push({ id: 'pea', name: 'PEA XTB', type: 'pea', order: 1 });
+    // Le relevé XTB n'est pas encore importé : seul le débit BRED existe.
+    S.transactions.push({ id: 'v1', accountId: 'cc', date: '2026-08-05', amount: -60000,
+      label: 'VIR SEPA XTB LTD', hash: 'h1' });
+    // Une vraie dépense qui ressemble vaguement : ne doit PAS être requalifiée.
+    S.transactions.push({ id: 'v2', accountId: 'cc', date: '2026-08-06', amount: -4500,
+      label: 'CARTE XTB STORE PARIS', hash: 'h2' });
+    // Un virement qui ne nomme aucun de mes comptes : intouché.
+    S.transactions.push({ id: 'v3', accountId: 'cc', date: '2026-08-07', amount: -20000,
+      label: 'VIR SEPA LOYER DUPONT', hash: 'h3' });
+    Rules.detectTransfers();
+    check('Virement — un versement vers mon PEA vu du seul côté BRED devient interne',
+      S.transactions.find(t => t.id === 'v1').internal === true &&
+      S.transactions.find(t => t.id === 'v1').internalBy === 'vers-mes-comptes');
+    check('Virement — un paiement carte qui cite le même mot ne bascule jamais (pas un virement)',
+      !S.transactions.find(t => t.id === 'v2').internal);
+    check('Virement — un virement vers un tiers reste une vraie dépense',
+      !S.transactions.find(t => t.id === 'v3').internal);
+
+    // Un compte au nom générique ne piège personne.
+    const S2 = fresh();
+    S2.accounts.push({ id: 'a', name: 'Compte courant', type: 'courant', order: 0 });
+    S2.accounts.push({ id: 'b', name: 'Livret', type: 'livret', order: 1 });
+    S2.transactions.push({ id: 'w', accountId: 'a', date: '2026-08-05', amount: -10000,
+      label: 'VIR SEPA COMPTE DE MON AMI', hash: 'h4' });
+    Rules.detectTransfers();
+    check('Virement — « Compte » ou « Livret » ne désignent personne : aucun faux positif',
+      S2.transactions.find(t => t.id === 'w').internalBy !== 'vers-mes-comptes',
+      S2.transactions.find(t => t.id === 'w').internalBy || 'non requalifié');
+  }
+
   /* ---- Performance constatée : ce qui est un flux, ce qui n'en est pas ---- */
   {
     const S = fresh();

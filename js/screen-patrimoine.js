@@ -309,7 +309,42 @@ const ScreenPatrimoine = {
     const libelles = {
       budget: `Épargne issue de vos <b>versements d'épargne du Budget</b>.`,
       previsionnel: `Épargne déduite de votre <b>prévisionnel</b> : revenus prévus moins dépenses prévues.`,
-      reel: `Épargne déduite de votre <b>réel constaté</b> : moyenne des mois complets, mouvements internes et épargne déjà versée exclus.`,
+      reel: (() => {
+        // Le chiffre le plus contesté de l'application : il doit montrer son
+        // calcul, dire ce qu'il exclut — le mois en cours n'est pas fini —
+        // et dénoncer lui-même ce qui le fausse (P7).
+        const r = ScreenPatrimoine.capaciteReelle();
+        if (!r) return 'Épargne déduite de votre <b>réel constaté</b> — aucun mois complet pour l’instant.';
+        let txt = `Épargne déduite de votre <b>réel constaté</b> sur ${r.mois.length} mois révolus
+          (${r.mois.map(U.fmtMonthShort).join(', ')}) :
+          <b class="num">${U.fmtEUR(r.revenus)}</b> de revenus − <b class="num">${U.fmtEUR(r.depenses)}</b>
+          de dépenses = <b class="num">${U.fmtEUR(r.montant)}</b> /mois.
+          ${U.fmtMonth(U.currentMonth())} n'y figure pas : le mois n'est pas fini.
+          Mouvements internes exclus${r.epargneDejaVersee ? `, ainsi que ${U.fmtEUR(r.epargneDejaVersee)} /mois d'épargne déjà versée` : ''}.`;
+        // L'épargne du mois en cours, elle, se CONSTATE : ce sont les
+        // versements déjà arrivés sur les comptes d'épargne et
+        // d'investissement — le chiffre que l'utilisateur a en tête.
+        const verse = U.sum(Store.state.transactions.filter(t => {
+          const acc = Engine.account(t.accountId);
+          return acc && ['livret', 'titres', 'pea', 'av', 'crypto'].includes(acc.type) &&
+            t.amount > 0 && Engine.budgetMonth(t) === U.currentMonth() &&
+            !Engine._isInterest(t) && !Engine._isSettlement(t);
+        }), t => t.amount);
+        if (verse > 0) {
+          txt += ` Ce mois-ci, vous avez déjà versé <b class="num">${U.fmtEUR(verse)}</b>
+            vers vos comptes d'épargne et d'investissement.`;
+        }
+        const suspects = ScreenPatrimoine.depensesSuspectes(r.mois);
+        if (suspects.length) {
+          const total = U.sum(suspects, x => x[1][0]);
+          txt += `<div class="notice warn" style="margin-top:6px"><b>Probablement sous-estimé :</b>
+            ${U.fmtEUR(U.roundCents(total / r.mois.length))} /mois comptés en dépenses ressemblent à des
+            virements vers vos propres comptes — ${suspects.slice(0, 3).map(([k, [v]]) =>
+              `${U.escapeHtml(k)} (${U.fmtEUR(v)})`).join(' · ')}. Opérations → « Reconnaître les
+            virements internes » les requalifie d'un clic.</div>`;
+        }
+        return txt;
+      })(),
       manuel: `Épargne <b>saisie à la main</b> pour cette simulation.`,
     };
     return { montant: S.projSavings, source: S.projSavingsSource || 'manuel',
