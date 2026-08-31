@@ -75,6 +75,9 @@ export default {
         eb_app_id_defini: !!env.EB_APP_ID,
         eb_cle_privee_definie: !!env.EB_CLE_PRIVEE,
         origines: env.ORIGINES || '(absentes)',
+        // Les NOMS des variables reçues, tels quels — jamais les valeurs.
+        // Un nom avec un espace ou une virgule parasite se verrait ici.
+        variables_recues: Object.keys(env).map(k => JSON.stringify(k)),
       }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } });
     }
 
