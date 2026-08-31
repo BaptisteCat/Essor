@@ -69,16 +69,37 @@ export default {
     // C'est ce qui permet de distinguer « secret absent » de « clé différente »
     // sans jamais faire circuler un secret.
     if (url.pathname === '/sante') {
-      return new Response(JSON.stringify({
+      const etat = {
         relais: 'essor',
         relais_cle_definie: !!env.RELAIS_CLE,
         eb_app_id_defini: !!env.EB_APP_ID,
         eb_cle_privee_definie: !!env.EB_CLE_PRIVEE,
         origines: env.ORIGINES || '(absentes)',
-        // Les NOMS des variables reçues, tels quels — jamais les valeurs.
-        // Un nom avec un espace ou une virgule parasite se verrait ici.
         variables_recues: Object.keys(env).map(k => JSON.stringify(k)),
-      }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } });
+      };
+      // Auto-test de bout en bout : signer un vrai jeton et demander à Enable
+      // Banking l'état de l'application. Ce que dit leur réponse — « does not
+      // exist », « not active », signature refusée — est LE diagnostic ; une
+      // clé privée illisible se nomme ici au lieu de planter sans explication.
+      if (etat.eb_app_id_defini && etat.eb_cle_privee_definie) {
+        try {
+          const jwt = await signerJwt(env);
+          const r = await fetch(API + '/application', {
+            headers: { 'Authorization': `Bearer ${jwt}` },
+          });
+          const corps = await r.text();
+          let d; try { d = JSON.parse(corps); } catch { d = {}; }
+          etat.enable_banking = {
+            statut: r.status,
+            reponse: r.ok ? `application « ${d.name || '?'} » reconnue et joignable`
+              : (d.message || corps.slice(0, 160)),
+          };
+        } catch (e) {
+          etat.enable_banking = { statut: 'signature impossible',
+            reponse: `la clé privée ne se lit pas (${e.message}) — recollez le PEM complet dans EB_CLE_PRIVEE` };
+        }
+      }
+      return new Response(JSON.stringify(etat), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } });
     }
 
     // Le relais est à vous : sans la clé partagée, il ne répond rien.
