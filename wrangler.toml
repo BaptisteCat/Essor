@@ -18,3 +18,22 @@ preview_urls = false
 [vars]
 # L'origine autorisée à appeler le relais (modifiable dans le tableau de bord).
 ORIGINES = "https://baptistecat.github.io"
+
+# Journaux du Worker, activés depuis le tableau de bord : inscrits ici pour
+# que chaque déploiement depuis le dépôt les conserve au lieu de les remettre
+# à zéro. Utiles pour lire ce que répond Enable Banking en cas d'accroc.
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
