@@ -622,8 +622,9 @@ const ScreenReglages = {
         de données en ligne peut être interrogé ci-dessous.
         <div class="row" style="margin-top:10px">
           <button id="rg-rededuce">Relancer la déduction</button>
-          <div class="field" style="margin:0"><label>Clé Financial Modeling Prep (gratuite, facultative)</label>
-            <input id="rg-fmp" value="${U.escapeHtml(S.settings.fmpKey || '')}" placeholder="collez votre clé" size="26"></div>
+          <div class="field" style="margin:0;min-width:250px">
+            <label>Clé Financial Modeling Prep (gratuite, facultative)</label>
+            ${UI.secret('rg-fmp', { placeholder: 'collez votre clé', autocomplete: 'off' })}</div>
           <button id="rg-fetch-geo">Récupérer les poids réels en ligne</button>
         </div>
         <div class="hint">Sans clé, tout fonctionne hors ligne. Avec une clé, seul le code du
@@ -649,6 +650,10 @@ const ScreenReglages = {
       </div>`;
     holder.querySelectorAll('[data-sym]').forEach(b => b.onclick = () => ScreenReglages.symbolModal(b.dataset.sym));
     document.getElementById('rg-fetch-crypto').onclick = (e) => UI.busy(e.target, () => ScreenReglages.fetchCrypto());
+    // La clé déjà enregistrée est replacée dans le champ après rendu (un champ
+    // secret ne porte pas sa valeur dans le HTML).
+    const champFmp = document.getElementById('rg-fmp');
+    if (champFmp) champFmp.value = S.settings.fmpKey || '';
     document.getElementById('rg-rededuce').onclick = (e) => UI.busy(e.target, async () => {
       const faits = Indices.applyAll({ force: true });
       const restants = Indices.nonDeduits();
@@ -779,7 +784,7 @@ const ScreenReglages = {
         'Sans clé, la déduction automatique par indice continue de fonctionner.');
       return;
     }
-    S.settings.fmpKey = key;
+    S.settings.fmpKey = key;   // conservée chiffrée, comme le reste des données
     Store.markDirty();
     const symbols = [...new Set(S.positionSnapshots.map(p => p.symbol))];
     if (!symbols.length) { UI.toast('Aucun support à mettre à jour.'); return; }
