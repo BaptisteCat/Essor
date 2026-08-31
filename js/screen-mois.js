@@ -13,6 +13,44 @@
 
 const ScreenMois = {
 
+  /* ---------- Constats : ce que le mois dit de vos habitudes ---------- */
+
+  renderConstats(month, enCours) {
+    const holder = document.getElementById('mois-constats');
+    if (!holder) return;
+    const t = Engine.tendances(month);
+    const phrases = [];
+    if (t.postes.length) {
+      phrases.push(`Vos plus gros postes : ${t.postes.map(x =>
+        `<b>${U.escapeHtml(x.nom)}</b> <span class="num">${U.fmtEUR(x.montant)}</span>
+         <span class="small">(${Math.round(x.part * 100)} %)</span>`).join(' · ')}.`);
+    }
+    for (const h of t.hausses.slice(0, 3)) {
+      phrases.push(`<span class="down">▲</span> <b>${U.escapeHtml(h.nom)}</b> :
+        <span class="num">${U.fmtEUR(h.actuel)}</span> — <span class="down num">+${Math.round(h.pct * 100)} %</span>
+        au-dessus de vos ${t.reference.length} derniers mois <span class="small num">(${U.fmtEUR(h.base)} en moyenne)</span>.`);
+    }
+    for (const b of t.baisses.slice(0, 2)) {
+      phrases.push(`<span class="up">▼</span> <b>${U.escapeHtml(b.nom)}</b> :
+        <span class="num">${U.fmtEUR(b.actuel)}</span> — <span class="up num">${Math.round(b.pct * 100)} %</span>
+        sous votre habitude <span class="small num">(${U.fmtEUR(b.base)})</span>.`);
+    }
+    if (t.revenus || t.depenses) {
+      phrases.push(`${enCours ? 'À ce stade du mois' : 'Au total'} :
+        <span class="num">${U.fmtEUR(t.revenus)}</span> de revenus −
+        <span class="num">${U.fmtEUR(t.depenses)}</span> de dépenses =
+        <b class="num ${t.marge >= 0 ? 'up' : 'down'}">${U.fmtEUR(t.marge)}</b>
+        ${t.marge >= 0 ? 'dégagés' : 'de découvert de flux'}.`);
+    }
+    if (!phrases.length) { holder.innerHTML = ''; return; }
+    holder.innerHTML = `<div class="card">
+      <h2>Constats${UI.info(`Chaque catégorie de dépense est comparée à sa moyenne des
+        ${t.reference.length || 3} mois précédents. Seuls les mouvements d'au moins 30 % et 20 €
+        méritent une phrase — le reste est du bruit. Mouvements internes exclus.`)}</h2>
+      <div class="constats">${phrases.map(x => `<div class="constat">${x}</div>`).join('')}</div>
+    </div>`;
+  },
+
   render() {
     const month = UI.analyzedMonth();
     const p = UI.period();
@@ -67,15 +105,13 @@ const ScreenMois = {
           <div class="kpi-sub">revenus − dépenses, mouvements internes exclus</div></div>
       </div>
 
-      ${enCours ? '' : `<div class="notice">
-        <b>Mois révolu : le prévisionnel n'est pas affiché.</b> Votre budget décrit ce que vous
-        prévoyez aujourd'hui, pas ce que vous prévoyiez en ${U.fmtMonth(month)} — les confronter
-        n'apprendrait rien. Ce mois est comparé au précédent, fait contre fait.
-        ${aPrec ? '' : ''}</div>`}
-
+      <div id="mois-constats"></div>
       <div id="mois-shifts"></div>
 
-      <div class="card"><h2>Revenus</h2><div id="mois-inc"></div></div>
+      <div class="card"><h2>Revenus${enCours ? '' : UI.info(`Mois révolu : le prévisionnel n'est
+        pas affiché — votre budget décrit ce que vous prévoyez aujourd'hui, pas ce que vous
+        prévoyiez alors. Ce mois est comparé au précédent, fait contre fait.`)}</h2>
+        <div id="mois-inc"></div></div>
 
       <div class="card">
         <div class="toolbar"><h2 style="margin:0">Dépenses par catégorie</h2>
@@ -100,6 +136,7 @@ const ScreenMois = {
     }
     ScreenMois.moisPrec = moisPrec;
 
+    ScreenMois.renderConstats(month, enCours);
     ScreenMois.renderShifts();
     ScreenMois.renderExpenses(actualByLine, uncatExp, flows);
     ScreenMois.renderIncomes(actualByLine, uncatInc);

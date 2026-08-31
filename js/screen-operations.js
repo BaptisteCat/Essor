@@ -27,9 +27,10 @@ const ScreenOperations = {
         <div class="drop-hint">Déposez ici votre archive « Relevé de tous comptes » — CSV bancaires,
           exports Revolut et rapports de courtier compris.</div>
         <div id="op-accounts"></div>
-        <div class="hint">Le solde est celui du ${months[months.length - 1] === U.currentMonth() ? 'jour' :
-          'dernier jour de la période'} ; le mouvement est la somme des opérations de la période.
-          Ces deux montants ne s'additionnent pas : le solde contient déjà le mouvement.</div>
+        <div class="hint">Solde au ${months[months.length - 1] === U.currentMonth() ? 'jour' :
+          'dernier jour de la période'} · mouvement de la période
+          ${UI.info(`Ces deux montants ne s'additionnent pas : le solde contient déjà le
+          mouvement. Le solde découle de vos certifications et des opérations connues.`)}</div>
       </div>
 
       <div class="card">
@@ -159,10 +160,11 @@ const ScreenOperations = {
       <div class="card">
         <h2>Doublons probables — ${paires.length} paire${paires.length > 1 ? 's' : ''},
           ${U.fmtEUR(total)} en jeu</h2>
-        <p class="small">Ces opérations se ressemblent trop : même compte, même montant, même libellé,
-        à quelques jours d'écart. Deux exports d'un même relevé peuvent différer d'un détail — la
-        colonne de date, le libellé — et l'empreinte anti-doublon ne les voit alors plus. Un salaire
-        compté deux fois fausse tout : à vous de trancher, rien n'est supprimé sans vous.</p>
+        <p class="small">Ces opérations se ressemblent trop — à vous de trancher, rien n'est
+        supprimé sans vous. ${UI.info(`Même compte, même montant, libellés identiques à quelques
+        jours d'écart, ou apparentés le même jour : deux exports d'un même relevé peuvent différer
+        d'un détail, et l'empreinte anti-doublon ne les voit alors plus. Un salaire compté deux
+        fois fausse tout.`)}</p>
         <div style="overflow-x:auto"><table>
           <tr><th>Libellé</th><th class="num">Montant</th><th>Dates</th><th></th></tr>
           ${paires.slice(0, 12).map(p => `<tr>
@@ -446,10 +448,11 @@ const ScreenOperations = {
 
     const m = UI.modal(`
       <h2>Actifs — ${U.escapeHtml(a.name)}</h2>
-      <p class="small">Déclarez ce que vous détenez et ce que vous l'avez payé en moyenne :
-      la valeur et la plus ou moins-value suivent le cours, récupéré automatiquement.
-      <span class="muted">Cours mis à jour ${U.escapeHtml(Cours.derniereMaj())}.</span>
-      <button class="ghost" id="ac-maj" style="margin-left:6px">Actualiser</button></p>
+      <p class="small"><span class="muted">Cours mis à jour ${U.escapeHtml(Cours.derniereMaj())}.</span>
+      <button class="ghost" id="ac-maj" style="margin-left:6px">Actualiser</button>
+      ${UI.info(`Déclarez ce que vous détenez et ce que vous l'avez payé en moyenne : la valeur et
+      la plus ou moins-value suivent le cours, récupéré automatiquement depuis CoinGecko. Seuls
+      les identifiants d'actifs sortent de la machine, jamais vos quantités.`)}</p>
 
       ${rows ? `<div style="overflow-x:auto"><table>
         <tr><th>Actif</th><th class="num">Quantité</th><th class="num col-large">Cours</th>
@@ -491,8 +494,7 @@ const ScreenOperations = {
           <div class="field"><div class="hint" id="ac-apercu">&nbsp;</div></div>
         </div>
       </div>
-      <div class="hint">La quantité déclarée fait foi à compter d'aujourd'hui. Le cours du jour vient
-      de CoinGecko : seuls les identifiants d'actifs sortent de la machine, jamais vos quantités.</div>
+      <div class="hint">La quantité déclarée fait foi à compter d'aujourd'hui.</div>
       <div class="erreur" id="ac-err"></div>
       <div class="actions"><button class="ghost" data-x="cancel">Fermer</button></div>`);
 

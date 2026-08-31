@@ -881,3 +881,30 @@ ol.pas-a-pas b { color: var(--texte); display: inline; margin: 0; }
   /* Le camembert n'a pas à remplir l'écran : il illustre, la légende chiffre. */
   .mob-repart svg { height: 200px; width: auto; display: block; margin: 0 auto; }
 }
+
+/* ---------- Bouton « i » : l'explication à la demande ---------- */
+
+.info-bulle { display: inline; }
+.info-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; min-height: 0; padding: 0; margin-left: 6px;
+  border-radius: 50%; border: 1px solid rgba(243,201,107,0.4);
+  background: none; color: var(--or-clair);
+  font-size: 11px; font-style: italic; font-weight: 700; font-family: Georgia, serif;
+  vertical-align: text-bottom; cursor: pointer; line-height: 1;
+}
+.info-btn:hover { background: rgba(243,201,107,0.14); border-color: var(--or); color: var(--or-pale); }
+.info-texte { display: none; font-weight: 400; text-transform: none; letter-spacing: normal; }
+.info-bulle.ouverte .info-texte {
+  display: block; margin: 8px 0 4px; padding: 8px 12px;
+  background: rgba(243,201,107,0.05); border-left: 3px solid rgba(243,201,107,0.4);
+  border-radius: 0 8px 8px 0; font-size: 12px;
+  -webkit-text-fill-color: var(--texte-faible);
+  background-image: none; animation: none;
+}
+@media (max-width: 820px) { .info-btn { width: 22px; height: 22px; font-size: 12px; } }
+
+/* ---------- Constats du mois ---------- */
+.constats { display: flex; flex-direction: column; gap: 7px; }
+.constat { font-size: 13px; line-height: 1.55; }
+.constat .num { font-variant-numeric: tabular-nums; }

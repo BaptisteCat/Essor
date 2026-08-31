@@ -18,8 +18,10 @@ const ScreenReglages = {
       <div class="grid c2">
         <div class="card">
           <h2>Hypothèses de projection</h2>
-          <p class="hint">Rendements annuels attendus par nature de compte — prudents par défaut.
-          Ce sont vos hypothèses : les projections les simulent, elles ne prédisent rien.</p>
+          <p class="hint">Prudentes par défaut.
+          ${UI.info(`Rendements annuels attendus par nature de compte. Ce sont vos hypothèses :
+          les projections les simulent, elles ne prédisent rien. « Constaté » = ce que vos comptes
+          ont réellement produit, hors versements — rouge si l'écart dépasse 3 points.`)}</p>
           <table id="rg-returns">
             <tr><th>Nature</th><th class="num">Rendement /an</th><th class="num">Volatilité /an</th>
               <th class="num" title="Rendement annualisé réellement constaté sur vos mois complets, hors versements">Constaté</th></tr>
@@ -49,9 +51,7 @@ const ScreenReglages = {
               }).join('');
             })()}
           </table>
-          <div class="hint">« Constaté » = ce que vos comptes ont réellement produit, hors versements —
-          à confronter à vos hypothèses. Rouge si l'écart dépasse 3 points.
-          <button class="lien" id="rg-toutes-natures">${ScreenReglages._toutesNatures
+          <div class="hint"><button class="lien" id="rg-toutes-natures">${ScreenReglages._toutesNatures
             ? 'Ne montrer que les natures de mes comptes'
             : 'Montrer toutes les natures'}</button></div>
           <div class="row" style="margin-top:12px">
@@ -69,9 +69,10 @@ const ScreenReglages = {
 
         <div class="card">
           <h2>Cibles d'épargne par compte</h2>
-          <p class="hint">Part du patrimoine visée, bornée éventuellement par un montant maximum —
-          ex. matelas de sécurité à 30 % mais jamais plus de 6 000 €. L'assistant et la
-          projection s'y réfèrent, avec le même moteur.</p>
+          <p class="hint">La stratégie que l'assistant et la projection appliquent.
+          ${UI.info(`Part du patrimoine visée par compte, bornée éventuellement par un montant
+          maximum — ex. matelas de sécurité à 30 % mais jamais plus de 6 000 €. Les deux écrans
+          utilisent le même moteur d'allocation, au centime près.`)}</p>
           <div id="rg-targets"></div>
         </div>
       </div>
@@ -91,9 +92,10 @@ const ScreenReglages = {
 
       <div class="card">
         <h2>Cours et répartition des supports</h2>
-        <p class="hint">Les supports capitalisants réinvestissent leurs revenus : les rendements constatés
-        sont des rendements totaux, dividendes déjà compris. Seuls les identifiants de supports cotés
-        sortent de la machine, pour récupérer les cours — rien d'autre.</p>
+        <p class="hint">Cours, prix de revient et répartition de chaque support.
+        ${UI.info(`Les supports capitalisants réinvestissent leurs revenus : les rendements
+        constatés sont des rendements totaux, dividendes déjà compris. Seuls les identifiants de
+        supports cotés sortent de la machine, pour récupérer les cours — rien d'autre.`)}</p>
         <div id="rg-symbols"></div>
       </div>
 
@@ -152,9 +154,10 @@ const ScreenReglages = {
     const holder = document.getElementById('rg-sync');
     const actif = Store.mode === 'sync';
     holder.innerHTML = `
-      <p class="small">Essor dépose dans un dépôt GitHub <b>privé</b> un fichier <b>chiffré</b> :
-      c'est lui qui porte vos données d'un appareil à l'autre. GitHub n'en voit qu'un bloc d'octets —
-      votre phrase de passe ne quitte jamais l'appareil, et sans elle le fichier est inexploitable.</p>
+      <p class="small">Vos appareils partagent un fichier chiffré via un dépôt GitHub privé.
+      ${UI.info(`GitHub n'en voit qu'un bloc d'octets : votre phrase de passe ne quitte jamais
+      l'appareil, et sans elle le fichier est inexploitable. Le jeton d'accès reste sur cet
+      appareil, chiffré lui aussi.`)}</p>
       ${actif
         ? `${Store.conflit ? `<div class="notice warn"><b>Le dépôt attend votre arbitrage.</b>
                Il a été modifié ailleurs depuis que cette session l'a ouvert. Vos données restent
@@ -277,9 +280,10 @@ const ScreenReglages = {
     // éléments n'existent plus, et rien ne doit être branché sur du vide.
     if (!document.body.contains(holder)) return;
     holder.innerHTML = `
-      <p class="small">L'application est publiée sur une adresse publique — c'est la seule chose que
-      GitHub Pages sache faire. Ce qui protège vos données n'est donc pas l'adresse, mais le
-      chiffrement : rien n'est lisible sans la phrase de passe, ni ici, ni dans le dépôt.</p>
+      <p class="small">Rien n'est lisible sans la phrase de passe.
+      ${UI.info(`L'adresse du site est publique — GitHub Pages ne sait pas faire autrement. Ce qui
+      protège vos données n'est pas l'adresse mais le chiffrement : ni cet appareil, ni le dépôt ne
+      contiennent quoi que ce soit en clair.`)}</p>
       <div class="row">
         <div class="field"><label>Verrouillage automatique après</label>
           <select id="rg-verrou">
@@ -294,9 +298,9 @@ const ScreenReglages = {
       <h3 style="margin-top:16px">Rester déverrouillé sur cet appareil</h3>
       <p class="small"><label><input type="checkbox" id="rg-reste" style="width:auto" ${resteOuvert ? 'checked' : ''}>
       L'application s'ouvre directement, sans phrase ni empreinte.</label></p>
-      <p class="small">${resteOuvert
-        ? "La clé de déchiffrement est confiée à ce navigateur : la protection est celle de l'appareil — son code, sa session. « Verrouiller maintenant » la retire."
-        : 'À réserver à un appareil qui a son propre verrou (code, empreinte). Le choix vaut pour cet appareil seulement.'}</p>
+      <p class="small">${UI.info(resteOuvert
+        ? "La clé de déchiffrement est confiée à ce navigateur : la protection devient celle de l'appareil — son code, sa session. « Verrouiller maintenant » la retire."
+        : 'À réserver à un appareil qui a son propre verrou (code, empreinte). Le choix vaut pour cet appareil seulement.')}</p>
 
       <h3 style="margin-top:16px">Déverrouillage sans saisie</h3>
       ${!bioDispo
@@ -401,9 +405,9 @@ const ScreenReglages = {
     // éléments n'existent plus, et rien ne doit être branché sur du vide.
     if (!document.body.contains(holder)) return;
     holder.innerHTML = `
-      <p class="small">Une sauvegarde est prise automatiquement avant chaque action destructrice (EX-95).
-      Elle est chiffrée, gardée sur cet appareil (les 12 dernières) et déposée dans <b>backups/</b> du
-      dépôt, où elle n'est jamais effacée.</p>
+      <p class="small">Une sauvegarde est prise avant chaque action destructrice.
+      ${UI.info(`Chiffrée, gardée sur cet appareil (les 12 dernières) et déposée dans backups/ du
+      dépôt, où elle n'est jamais effacée.`)}</p>
       <div class="row">
         <div class="field"><button id="rg-backup">Sauvegarder maintenant</button></div>
         <div class="field"><button id="rg-export-enc">Exporter une copie chiffrée…</button></div>
@@ -663,10 +667,12 @@ const ScreenReglages = {
           <td class="right"><button class="ghost" data-sym="${U.escapeHtml(sym)}">gérer</button></td></tr>`;
       }).join('')}</table>
       ${aDesFonds ? `<div class="notice" style="margin-top:12px">
-        <b>Répartition géographique.</b> Elle est déduite automatiquement de l'indice suivi par
-        chaque fonds (reconnu d'après son nom et son code) — vous n'avez rien à saisir.
-        Ce sont les poids publiés de l'indice ; pour les poids réels du fonds, un fournisseur
-        de données en ligne peut être interrogé ci-dessous.
+        <b>Répartition géographique</b> — déduite automatiquement de l'indice suivi par chaque
+        fonds. ${UI.info(`Reconnue d'après le nom et le code du support ; ce sont les poids publiés
+        de l'indice, pas la composition du fonds au jour le jour. Pour les poids réels, un
+        fournisseur en ligne peut être interrogé ci-dessous — accès payant chez Financial Modeling
+        Prep depuis 2025 ; sans clé, tout fonctionne hors ligne et seul le code du support sort de
+        la machine.`)}
         <div class="row" style="margin-top:10px">
           <button id="rg-rededuce">Relancer la déduction</button>
           <div class="field" style="margin:0;min-width:250px">
@@ -674,17 +680,13 @@ const ScreenReglages = {
             ${UI.secret('rg-fmp', { placeholder: 'collez votre clé', autocomplete: 'off' })}</div>
           <button id="rg-fetch-geo">Récupérer les poids réels en ligne</button>
         </div>
-        <div class="hint">Sans clé, tout fonctionne hors ligne : la répartition est déduite des poids
-          publiés de l'indice suivi, ce qui suffit pour un patrimoine personnel. Les poids <b>réels</b>
-          du fonds sont, depuis 2025, un accès <b>payant</b> chez Financial Modeling Prep — une clé
-          gratuite répondra « non inclus dans votre formule ». Avec une clé, seul le code du support
-          sort de la machine, comme pour les cours.</div>
+
       </div>` : ''}
       ${montrerArrondis ? `<div class="notice" style="margin-top:12px">
-        <b>Arrondis convertis en bitcoin.</b> Si votre carte arrondit chaque paiement et
-        convertit la différence en BTC, ces petits débits sortent de votre patrimoine alors
-        que l'argent a seulement changé de forme. Essor peut les transformer en position
-        bitcoin, chacun au cours de <b>son propre jour</b>.
+        <b>Arrondis convertis en bitcoin.</b> ${UI.info(`Si votre carte arrondit chaque paiement
+        et convertit la différence en BTC, ces petits débits sortent de votre patrimoine alors que
+        l'argent a seulement changé de forme. Essor les transforme en position bitcoin, chacun au
+        cours de son propre jour. Rejouable sans doublon.`)}
         <div class="row" style="margin-top:10px">
           <div class="field" style="margin:0"><label>Libellé de ces opérations</label>
             <input id="rg-btc-motif" value="${U.escapeHtml(S.settings.btcRoundUpPattern || 'TRANSFER REVOLUT DIGITAL')}" size="26"></div>
@@ -692,7 +694,7 @@ const ScreenReglages = {
             ${UI.accountSelect('rg-btc-compte', S.settings.btcRoundUpAccount, { allowNone: true })}</div>
           <button id="rg-btc-go">Convertir les arrondis</button>
         </div>
-        <div class="hint">Rejouable sans risque : une opération déjà convertie ne l'est jamais deux fois.</div>
+
       </div>` : ''}
       ${aDeLaCrypto ? `<div class="row" style="margin-top:10px">
         <div class="row" style="align-items:center">
@@ -705,10 +707,11 @@ const ScreenReglages = {
             <select id="rg-cours-h">${[1, 3, 6, 12, 24].map(h =>
               `<option value="${h}" ${(S.settings.coursIntervalleH || 6) === h ? 'selected' : ''}>${h} h</option>`).join('')}</select></div>
         </div>
-        <div class="hint">Dernière mise à jour : ${U.escapeHtml(Cours.derniereMaj())}. Seuls les
-          identifiants d'actifs (« bitcoin », « ethereum ») sortent de la machine — jamais vos
-          quantités ni vos montants. Sans réseau, la valorisation garde le dernier cours connu.</div>
-        <span class="hint">Les autres cours se saisissent manuellement ou via un relevé de courtier — l'application fonctionne entièrement hors ligne, la mise à jour des cours est la seule exception.</span>
+        <div class="hint">Dernière mise à jour : ${U.escapeHtml(Cours.derniereMaj())}.
+          ${UI.info(`Seuls les identifiants d'actifs (« bitcoin », « ethereum ») sortent de la
+          machine — jamais vos quantités ni vos montants. Sans réseau, la valorisation garde le
+          dernier cours connu.`)}</div>
+
       </div>` : ''}`;
     holder.querySelectorAll('[data-sym]').forEach(b => b.onclick = () => ScreenReglages.symbolModal(b.dataset.sym));
     // Les blocs sont conditionnels : ne brancher que ce qui est à l'écran.

@@ -510,6 +510,58 @@ const Engine = {
       totalIncomes: U.sum(incomes, t => t.amount) };
   },
 
+  /* ---------- Constats : ce qui a bougé dans les habitudes ----------
+     Comparer un mois à la moyenne de ses trois prédécesseurs, catégorie par
+     catégorie, et ne retenir que ce qui mérite une phrase : une hausse ou une
+     baisse d'au moins 30 % ET d'au moins 20 €. En dessous, c'est du bruit —
+     et un tableau de plus, pas un constat. */
+
+  tendances(month) {
+    const S = Engine.S();
+    // Trois mois de référence : les précédents qui portent des opérations.
+    const reference = [];
+    for (let i = 1; i <= 6 && reference.length < 3; i++) {
+      const m = U.addMonths(month, -i);
+      if (S.transactions.some(t => Engine.budgetMonth(t) === m && !t.internal)) reference.push(m);
+    }
+    const parCategorie = (m) => {
+      const out = new Map();
+      for (const t of S.transactions) {
+        if (t.internal || t.amount >= 0 || Engine.budgetMonth(t) !== m) continue;
+        const info = t.lineId ? Engine.budgetLine(t.lineId) : null;
+        const nom = info && info.category ? info.category.name : (info ? info.line.name : 'À classer');
+        out.set(nom, (out.get(nom) || 0) + Math.abs(t.amount));
+      }
+      return out;
+    };
+    const actuel = parCategorie(month);
+    const bases = reference.map(parCategorie);
+    const moyenne = new Map();
+    for (const b of bases) for (const [nom, v] of b) moyenne.set(nom, (moyenne.get(nom) || 0) + v);
+    for (const nom of moyenne.keys()) moyenne.set(nom, moyenne.get(nom) / reference.length);
+
+    const hausses = [], baisses = [];
+    if (reference.length >= 2) {
+      for (const nom of new Set([...actuel.keys(), ...moyenne.keys()])) {
+        const a = actuel.get(nom) || 0;
+        const b = moyenne.get(nom) || 0;
+        if (b < 2000 && a < 2000) continue;   // trop petit pour faire une phrase
+        const ecart = a - b;
+        if (b > 0 && a >= b * 1.3 && ecart >= 2000) hausses.push({ nom, actuel: a, base: b, pct: a / b - 1 });
+        else if (b >= 2000 && a <= b * 0.7 && -ecart >= 2000) baisses.push({ nom, actuel: a, base: b, pct: a / b - 1 });
+      }
+      hausses.sort((x, y) => (y.actuel - y.base) - (x.actuel - x.base));
+      baisses.sort((x, y) => (x.actuel - x.base) - (y.actuel - y.base));
+    }
+    const flows = Engine.monthFlows(month);
+    const total = -flows.totalExpenses;
+    const postes = [...actuel.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3)
+      .map(([nom, v]) => ({ nom, montant: v, part: total > 0 ? v / total : 0 }));
+    return { reference, hausses, baisses, postes,
+      marge: flows.totalIncomes + flows.totalExpenses,
+      revenus: flows.totalIncomes, depenses: -flows.totalExpenses };
+  },
+
   budgetLine(lineId) {
     const b = Engine.S().budget;
     for (const c of b.categories) {

@@ -39,6 +39,17 @@ const UI = {
     UI.toast(`<b>${U.escapeHtml(cause)}</b><br>${U.escapeHtml(action || '')}`, 'error');
   },
 
+  /* ---------- Bouton d'information ----------
+     L'application expliquait tout, tout le temps : les écrans croulaient sous
+     les paragraphes. L'explication reste — elle fait partie du produit (P7) —
+     mais derrière un « i » : visible pour qui se pose la question, invisible
+     pour qui connaît déjà la réponse. */
+
+  info(html) {
+    return `<span class="info-bulle"><button type="button" class="info-btn"
+      aria-label="Explication">i</button><span class="info-texte hint">${html}</span></span>`;
+  },
+
   /* ---------- Champ secret ---------- */
 
   // Une phrase de passe longue se tape mal à l'aveugle, surtout au pouce sur un
@@ -400,9 +411,12 @@ UI.fiches = function () {
     if (card.querySelector('.kpi-val')) return;   // synthèse : c'est l'écran lui-même
     card.dataset.fiche = '1';
     card.classList.add('fiche');
-    // Le h2 porte souvent un sous-titre (« Projection — inflation 2 %… ») :
-    // la ligne repliée n'a besoin que du nom.
-    const titre = h2.textContent.replace(/\s+/g, ' ').trim().split(' — ')[0].slice(0, 40);
+    // Le h2 porte souvent un sous-titre (« Projection — inflation 2 %… ») et
+    // parfois un bouton « i » avec son texte replié : la ligne de fiche n'a
+    // besoin que du nom.
+    const h2Propre = h2.cloneNode(true);
+    h2Propre.querySelectorAll('.info-bulle, .small').forEach(x => x.remove());
+    const titre = h2Propre.textContent.replace(/\s+/g, ' ').trim().split(' — ')[0].slice(0, 40);
 
     const tete = document.createElement('button');
     tete.type = 'button';
@@ -500,3 +514,10 @@ UI.retourArriere = function () {
   }
   return null;
 };
+
+// Un seul écouteur pour tous les « i » : le texte se déplie sous son bouton,
+// et se replie d'un second toucher — jamais de bulle flottante à positionner.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest ? e.target.closest('.info-btn') : null;
+  if (b) { b.parentElement.classList.toggle('ouverte'); return; }
+});

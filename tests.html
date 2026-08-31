@@ -693,6 +693,42 @@ try {
     bac.remove();
   }
 
+  /* ---- Constats : ce qui a bougé dans les habitudes ---- */
+  {
+    const S = fresh();
+    S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+    S.budget.categories.push({ id: 'cA', name: 'Alimentation', lines: [{ id: 'lA', name: 'Courses', amount: 30000 }] });
+    S.budget.categories.push({ id: 'cL', name: 'Loisirs', lines: [{ id: 'lL', name: 'Sorties', amount: 10000 }] });
+    const tx = (date, montant, ligne) => S.transactions.push({ id: U.uid(), accountId: 'cc',
+      date, amount: montant, label: 'X', lineId: ligne, hash: U.uid() });
+    for (const [m, ali, loi] of [['2026-05', -28000, -9000], ['2026-06', -31000, -11000], ['2026-07', -29000, -10000]]) {
+      tx(m + '-10', ali, 'lA'); tx(m + '-15', loi, 'lL');
+    }
+    tx('2026-08-10', -15000, 'lA');   // alimentation en baisse
+    tx('2026-08-12', -18000, 'lL');   // loisirs +80 %
+    tx('2026-08-20', -800, 'lA');     // petit mouvement : ne fait pas de phrase seul
+
+    const t = Engine.tendances('2026-08');
+    check('Constats — la référence est la moyenne des trois mois précédents',
+      t.reference.join(',') === '2026-07,2026-06,2026-05');
+    check('Constats — une hausse de 30 % et 20 € au moins fait une phrase, chiffrée',
+      t.hausses.length === 1 && t.hausses[0].nom === 'Loisirs' &&
+      t.hausses[0].actuel === 18000 && Math.round(t.hausses[0].pct * 100) === 80,
+      JSON.stringify(t.hausses));
+    check('Constats — une baisse marquée aussi',
+      t.baisses.some(b => b.nom === 'Alimentation' && b.actuel === 15800));
+    check('Constats — les plus gros postes du mois, avec leur part',
+      t.postes[0].nom === 'Loisirs' && t.postes[0].montant === 18000 && t.postes[0].part > 0.5);
+
+    // Sans historique, pas de fausses tendances : rien ne se compare à rien.
+    const S2 = fresh();
+    S2.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+    S2.transactions.push({ id: 'a', accountId: 'cc', date: '2026-08-10', amount: -50000, label: 'X', hash: 'h' });
+    const t2 = Engine.tendances('2026-08');
+    check('Constats — un seul mois de données : aucune hausse ou baisse inventée',
+      t2.hausses.length === 0 && t2.baisses.length === 0 && t2.postes.length === 1);
+  }
+
   /* ---- Deux exports, une opération : les libellés apparentés ---- */
   {
     check('Libellés — les mots du court contenus dans le long : apparentés',

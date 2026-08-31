@@ -104,7 +104,8 @@ const ScreenPatrimoine = {
       <div class="card">
         <h2>Historique mensuel</h2>
         <div class="chart-holder" id="pat-history"></div>
-        <div class="hint">Un mois révolu vaut le patrimoine à son dernier jour ; le mois en cours, le patrimoine du jour.</div>
+        <div class="hint">${UI.info(`Un mois révolu vaut le patrimoine à son dernier jour ;
+        le mois en cours, le patrimoine du jour.`)}</div>
       </div>
       <div class="card">
         <h2 id="pat-geo-title">Exposition géographique</h2>
@@ -194,7 +195,8 @@ const ScreenPatrimoine = {
       <div class="card">
         <h2>Historique mensuel</h2>
         <div class="chart-holder" id="pat-history"></div>
-        <div class="hint">Un mois révolu vaut le patrimoine à son dernier jour ; le mois en cours, le patrimoine du jour.</div>
+        <div class="hint">${UI.info(`Un mois révolu vaut le patrimoine à son dernier jour ;
+        le mois en cours, le patrimoine du jour.`)}</div>
       </div>
 
       <div class="card"><h2>Répartition par classe d'actifs</h2><div id="pat-alloc"></div></div>
