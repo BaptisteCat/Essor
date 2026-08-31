@@ -184,6 +184,7 @@ const Store = {
     // antérieure à cette version), on ne suppose rien : la première divergence
     // sera arbitrée à la main, une fois.
     Store._sigEnvoyee = Store._sigBase = (await Store._get('sigEnvoyee')) || null;
+    Store._baseTexte = (await Store._get('base')) || null;
     await Store._brancherDepot();
     await Store._majIndices();
   },
@@ -346,17 +347,28 @@ const Store = {
   // disent la même chose, quelle que soit l'heure ou l'appareil de leur envoi.
   signature(etat) { return U.hash(JSON.stringify(Store.documentSync(etat))); },
 
+  // Le document du dernier accord avec le dépôt. C'est le troisième point de
+  // repère — celui qui permet de dire « cette fiche, c'est LUI qui l'a
+  // changée » plutôt que de constater bêtement deux versions différentes.
+  _baseTexte: null,
+  baseDoc() {
+    if (!Store._baseTexte) return null;
+    try { return JSON.parse(Store._baseTexte); } catch { return null; }
+  },
+
   _sigBase: null,        // empreinte du document au dernier accord avec le dépôt
   _sigEnvoyee: null,     // empreinte du dernier envoi réussi
 
   // Le point d'accord avec le dépôt survit à la fermeture : sans lui, la
   // session suivante ne saurait plus distinguer « j'ai modifié » de
   // « l'autre appareil a modifié ».
-  async _noterAccord(sha, sig) {
+  async _noterAccord(sha, sig, texte) {
     Store._shaDistant = sha;
     Store._sigBase = Store._sigEnvoyee = sig;
+    Store._baseTexte = texte || JSON.stringify(Store.documentSync());
     await Store._put('sha', sha);
     await Store._put('sigEnvoyee', sig);
+    await Store._put('base', Store._baseTexte);
   },
 
   /* ---------- Identité de l'appareil ---------- */
@@ -527,19 +539,155 @@ const Store = {
       return;
     }
 
-    // 3. Les deux côtés ont réellement changé depuis leur dernier point commun.
-    //    Là, et seulement là, la question se pose.
-    Store.conflit = true;
-    Store.conflitInfo = {
-      distant: { maj: docDistant.maj || null, par: docDistant.majPar || null, doc: docDistant, sha: distant.sha },
-      local: { maj: Store.state.maj || null, par: Store.state.majPar || null },
-      resume: Store.comparer(docDistant),
-    };
-    Store.saveStatus = 'conflit';
-    Store._notify();
-    if (Store.onConflict) Store.onConflict();
+    // 3. Les deux côtés ont changé. Ce n'est presque jamais une contradiction :
+    //    l'un a importé un relevé, l'autre a classé des opérations. Poser la
+    //    question à chaque fois était intenable — et trompeur, puisque « garder
+    //    la mienne » jetait le travail de l'autre appareil.
+    //    On réunit donc les deux, fiche par fiche, en s'appuyant sur le
+    //    document du dernier accord : ce qui n'a changé que d'un côté vient de
+    //    ce côté-là ; ce qui a changé des deux revient au plus récent.
+    const base = Store.baseDoc();
+    // Notre document, horodatage compris, et la préférence qui va avec : ce
+    // que l'on vient de modifier prime sur ce que le dépôt portait déjà.
+    const docLocal = Store.documentSync();
+    docLocal.maj = Store.state.maj;
+    docLocal.majPar = Store.state.majPar;
+    const fusion = Store.fusion3(base, docLocal, docDistant, { prefere: 'local' });
+    await Store._sauvegardeLocale('avant-fusion-automatique');
+    const avant = Store._derniereEnveloppe;
+    const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
+    Store.state = Store.migrate(fusion.doc);
+    Store.state.ui = local.ui;
+    Store.state.snapshots = local.snapshots || {};
+    Store.state.snapshotsDirty = true;
+    Store.state.maj = docDistant.maj;
+    Store.state.majPar = docDistant.majPar;
+    Store.conflit = false;
+    Store.conflitInfo = null;
+    Store._shaDistant = distant.sha;
+    await Store._ecrireLocal();
+    await Store._pousser({ forcer: true, message: 'Essor — fusion automatique', reessai: true });
+    if (Store.onFusionAuto) {
+      Store.onFusionAuto({
+        par: docDistant.majPar || null,
+        contestes: fusion.contestes,
+        sansBase: !base,
+        annuler: avant,          // l'enveloppe d'avant fusion, pour revenir en arrière
+      });
+    }
   },
 
+  // Revenir à l'état d'avant une fusion automatique.
+  async annulerFusion(enveloppe) {
+    if (!enveloppe) throw new Error('Rien à annuler.');
+    const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
+    Store.state = Store.migrate(await Coffre.ouvrirAvecCle(Store._cle, enveloppe));
+    Store.state.ui = local.ui;
+    Store.state.snapshots = local.snapshots || {};
+    Store.state.snapshotsDirty = true;
+    await Store._ecrireLocal();
+    await Store._pousser({ forcer: true, message: 'Essor — fusion annulée', reessai: true });
+  },
+
+  /* ---------- Fusion à trois points ---------- */
+
+  // base = document du dernier accord, local = le nôtre, distant = celui du
+  // dépôt. → {doc, contestes:[clés réellement modifiées des deux côtés]}
+  // Sans base, on se rabat sur une réunion simple, le plus récent l'emportant.
+  // `prefere` tranche les fiches modifiées des deux côtés. Lors d'un envoi,
+  // c'est 'local' : la modification qu'on est en train de faire est, par
+  // construction, la plus récente — et c'est celle que l'utilisateur veut
+  // garder. À défaut de préférence, l'horodatage des documents décide.
+  fusion3(base, local, distant, { prefere } = {}) {
+    const contestes = [];
+    const doc = {};
+    const plusRecent = prefere || ((distant.maj || '') > (local.maj || '') ? 'distant' : 'local');
+    const cles = new Set([...Object.keys(local), ...Object.keys(distant)]);
+    for (const k of cles) {
+      if (Store.META.includes(k) || Store.LOCAL.includes(k)) continue;
+      const l = local[k], d = distant[k];
+      const sl = JSON.stringify(l), sd = JSON.stringify(d);
+      if (sl === sd) { doc[k] = l; continue; }
+      if (base) {
+        const sb = JSON.stringify(base[k]);
+        if (sb === sl) { doc[k] = d; continue; }   // seul le dépôt a bougé
+        if (sb === sd) { doc[k] = l; continue; }   // seul nous
+      }
+      // Les deux ont bougé : on descend d'un cran.
+      if (Array.isArray(l) && Array.isArray(d) && Store._listeIdentifiee(l, d)) {
+        const r = Store._fusionListe(base ? base[k] : null, l, d, plusRecent === 'distant');
+        doc[k] = r.liste;
+        for (const id of r.contestes) contestes.push(`${k}:${id}`);
+      } else if (l && d && typeof l === 'object' && typeof d === 'object' && !Array.isArray(l) && !Array.isArray(d)) {
+        // Dictionnaires (cours, métadonnées, mémoire d'import) : réunion clé à clé.
+        doc[k] = plusRecent === 'distant' ? Object.assign({}, l, d) : Object.assign({}, d, l);
+      } else {
+        doc[k] = plusRecent === 'distant' ? d : l;
+        contestes.push(k);
+      }
+    }
+    // Deux imports du même relevé, un par appareil, créent deux jeux
+    // d'identifiants pour les mêmes opérations : la règle du relevé
+    // s'applique aussi ici (EX-27).
+    if (Array.isArray(doc.transactions)) {
+      doc.transactions = Store._plafonnerDoublons(doc.transactions, local.transactions || [], distant.transactions || []);
+    }
+    return { doc, contestes };
+  },
+
+  _listeIdentifiee(a, b) {
+    const x = (a && a[0]) || (b && b[0]);
+    return !!x && typeof x === 'object' && x.id !== undefined;
+  },
+
+  _fusionListe(base, local, distant, distantGagne) {
+    const parId = (a) => { const m = new Map(); for (const x of (a || [])) m.set(x.id, x); return m; };
+    const mb = parId(base), ml = parId(local), md = parId(distant);
+    const contestes = [], liste = [];
+    for (const id of new Set([...ml.keys(), ...md.keys()])) {
+      const b = mb.get(id), l = ml.get(id), d = md.get(id);
+      const sb = b === undefined ? null : JSON.stringify(b);
+      if (l && !d) {
+        // Absent du dépôt : supprimé là-bas si nous ne l'avons pas touché,
+        // sinon c'est notre modification qui l'emporte sur une suppression.
+        if (base && sb !== null && sb === JSON.stringify(l)) continue;
+        liste.push(l); continue;
+      }
+      if (!l && d) {
+        if (base && sb !== null && sb === JSON.stringify(d)) continue;   // supprimé ici
+        liste.push(d); continue;
+      }
+      const sl = JSON.stringify(l), sd = JSON.stringify(d);
+      if (sl === sd) { liste.push(l); continue; }
+      if (base && sb !== null) {
+        if (sb === sl) { liste.push(d); continue; }
+        if (sb === sd) { liste.push(l); continue; }
+      }
+      liste.push(distantGagne ? d : l);
+      contestes.push(id);
+    }
+    return { liste, contestes };
+  },
+
+  // Pour une même empreinte, le nombre d'occurrences retenu est le plus grand
+  // des deux côtés — jamais leur somme.
+  _plafonnerDoublons(fusion, local, distant) {
+    const cle = (t) => `${t.accountId}|${t.hash}`;
+    const compter = (l) => { const m = new Map(); for (const t of l) m.set(cle(t), (m.get(cle(t)) || 0) + 1); return m; };
+    const cl = compter(local), cd = compter(distant);
+    const vus = new Map(), out = [];
+    for (const t of fusion) {
+      const k = cle(t);
+      const max = Math.max(cl.get(k) || 0, cd.get(k) || 0);
+      const n = vus.get(k) || 0;
+      if (n >= max) continue;
+      vus.set(k, n + 1);
+      out.push(t);
+    }
+    return out;
+  },
+
+  onFusionAuto: null,
   conflitInfo: null,
   onFastForward: null,
 
@@ -615,9 +763,11 @@ const Store = {
       await Store._adopter(distant, docDistant);
       return 'repris';
     }
-    // Divergence réelle : l'envoi la fera trancher, avec le même arbitrage.
+    // Les deux côtés ont bougé : l'envoi passera par la fusion, exactement
+    // comme lorsque le dépôt refuse une écriture. Une seule voie, un seul
+    // comportement.
     await Store.save();
-    return Store.conflit ? 'conflit' : 'a-jour';
+    return Store.conflit ? 'conflit' : 'fusionne';
   },
 
   /* ---------- Résolution d'une divergence réelle ---------- */
@@ -648,51 +798,20 @@ const Store = {
   async fusionner() {
     if (!Store.conflitInfo) throw new Error('Aucune divergence à fusionner.');
     const distant = Store.conflitInfo.distant;
-    const docDistant = distant.doc;
     await Store._sauvegardeLocale('avant-fusion');
-
-    const distantPlusRecent = (distant.maj || '') > (Store.state.maj || '');
-    const [vieux, neuf] = distantPlusRecent ? [Store.state, docDistant] : [docDistant, Store.state];
-
-    // Les collections identifiées se réunissent par identifiant.
-    const COLLECTIONS = ['transactions', 'accounts', 'certifications', 'trades',
-      'positionSnapshots', 'goals', 'credits', 'rules', 'ambiguousMerchants'];
-    const fusion = Object.assign({}, vieux, neuf);   // le reste : au plus récent
-    for (const k of COLLECTIONS) {
-      const a = vieux[k] || [], b = neuf[k] || [];
-      if (!Array.isArray(a) || !Array.isArray(b)) continue;
-      if (!a.length || !a[0] || a[0].id === undefined) { fusion[k] = b.length ? b : a; continue; }
-      const parId = new Map();
-      for (const x of a) parId.set(x.id, x);
-      for (const x of b) parId.set(x.id, x);       // le plus récent l'emporte
-      fusion[k] = [...parId.values()];
-    }
-    // Dictionnaires (cours, métadonnées) : réunion clé à clé.
-    for (const k of ['prices', 'priceMeta', 'geo', 'geoSource', 'geoIndice', 'pru', 'importMemory']) {
-      fusion[k] = Object.assign({}, vieux[k] || {}, neuf[k] || {});
-    }
-    if (fusion.prices) {
-      for (const sym of Object.keys(fusion.prices)) {
-        fusion.prices[sym] = Object.assign({}, (vieux.prices || {})[sym] || {}, (neuf.prices || {})[sym] || {});
-      }
-    }
-    // Réunir deux imports du même relevé recréerait les doublons que
-    // l'application s'interdit (EX-27) : on rétablit la règle — pour une même
-    // empreinte, le nombre d'occurrences du côté qui en comptait le plus.
-    fusion.transactions = Store._dedoublonner(vieux.transactions || [], neuf.transactions || []);
-
+    const docLocal = Store.documentSync();
+    docLocal.maj = Store.state.maj;
+    const fusion = Store.fusion3(Store.baseDoc(), docLocal, distant.doc, { prefere: 'local' });
     const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
-    Store.state = Store.migrate(fusion);
+    Store.state = Store.migrate(fusion.doc);
     Store.state.ui = local.ui;
     Store.state.snapshots = local.snapshots || {};
     Store.state.snapshotsDirty = true;
     Store._shaDistant = distant.sha;
-    await Store._put('sha', distant.sha);
     Store.conflit = false;
     Store.conflitInfo = null;
-    Store._sigBase = null;                 // la fusion est neuve des deux côtés
     await Store._ecrireLocal();
-    await Store._pousser({ forcer: true, message: 'Essor — fusion des deux appareils' });
+    await Store._pousser({ forcer: true, message: 'Essor — fusion des deux appareils', reessai: true });
   },
 
   // Reprend la règle de dédoublonnage de l'import (EX-27) : deux relevés
@@ -851,7 +970,7 @@ const Store = {
   // Tout ce qui est scellé avec l'ancienne clé — coffre, jeton, sauvegardes —
   // deviendrait illisible sous une nouvelle : on ne le garde pas.
   async _reinitialiserAppareil() {
-    for (const k of ['coffre', 'jeton', 'sha', 'sigEnvoyee', 'backups', 'indices', 'bio']) await Store._del(k);
+    for (const k of ['coffre', 'jeton', 'sha', 'sigEnvoyee', 'base', 'backups', 'indices', 'bio']) await Store._del(k);
     Store._jeton = null; Store._derniereEnveloppe = null;
     Store._enAttente = false; Store.conflit = false;
   },

@@ -324,6 +324,22 @@ const App = {
     Install.onChange = () => { if (App.current === 'reglages') ScreenReglages.renderInstallation(); };
     // L'autre appareil était simplement en avance : on l'a suivi, on le dit,
     // et on ne demande rien — il n'y avait rien à arbitrer.
+    // Les deux appareils ont travaillé : Essor réunit, puis le dit. Rien n'est
+    // perdu, et le geste reste annulable — c'est mieux qu'une question posée à
+    // chaque modification, à laquelle il n'y avait pas de bonne réponse.
+    Store.onFusionAuto = (info) => {
+      Engine.invalidate();
+      App.render();
+      const par = info.par && info.par.nom ? U.escapeHtml(info.par.nom) : "l'autre appareil";
+      const nuance = info.contestes.length
+        ? ` ${info.contestes.length} fiche(s) modifiée(s) des deux côtés ont pris la version la plus récente.`
+        : '';
+      UI.toastAction(`Vos modifications ont été <b>réunies</b> avec celles de ${par}.${nuance}`,
+        'Revenir à ma version seule',
+        () => Store.annulerFusion(info.annuler)
+          .then(() => { Engine.invalidate(); App.render(); UI.toast('Fusion annulée : seule votre version est conservée.'); })
+          .catch((e) => UI.error(e.message, "La fusion n'a pas pu être annulée.")));
+    };
     Store.onFastForward = (doc) => {
       Engine.invalidate();
       App.render();
@@ -349,6 +365,7 @@ const App = {
         App.render();
         UI.toast('Données mises à jour depuis le dépôt.');
       }
+      // 'fusionne' : onFusionAuto a déjà tout dit et tout rafraîchi.
       if (Store._enAttente) await Store.synchroniser();
     } finally { App._rattrapageEnCours = false; }
   },

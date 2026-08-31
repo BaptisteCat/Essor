@@ -466,12 +466,17 @@ try {
       (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).goals.length === 5,
       `questions=${questions}, shaVrai=${shaVrai}`);
 
-    // Divergence réelle : chacun a modifié les données depuis le point commun.
+    // Les deux côtés ont travaillé depuis leur dernier point commun. Ce n'est
+    // presque jamais une contradiction : ici, l'un a importé une opération et
+    // ajouté un objectif, l'autre a fait de même. Rien à arbitrer — on réunit.
+    let fusions = [];
+    Store.onFusionAuto = (i) => fusions.push(i);
+    Store._baseTexte = JSON.stringify(Store.documentSync());   // point d'accord
     await deposer(etat({ goals: [{ id: 'g1', name: 'objectif', target: 100 }, { id: 'g9', name: 'fait sur le téléphone', target: 42 }],
       accounts: [{ id: 'cc', name: 'Compte courant', type: 'courant', order: 0 }],
       transactions: [{ id: 't-tel', accountId: 'cc', date: '2026-08-10', amount: -500, label: 'BOULANGERIE', hash: 'h1' }],
       maj: '2026-08-31T12:00:00.000Z', majPar: { id: 'appareil-b', nom: 'iPhone' } }), 'divergent');
-    Store.state.goals.push({ id: 'g6', name: 'fait ici', target: 77 });
+    Store.state.goals = [{ id: 'g1', name: 'objectif', target: 100 }, { id: 'g6', name: 'fait ici', target: 77 }];
     Store.state.accounts = [{ id: 'cc', name: 'Compte courant', type: 'courant', order: 0 }];
     Store.state.transactions = [
       { id: 't-pc', accountId: 'cc', date: '2026-08-11', amount: -300, label: 'CAFE', hash: 'h2' },
@@ -479,31 +484,61 @@ try {
     ];
     Store.state.maj = '2026-08-31T13:00:00.000Z';
     await Store._doSave();
-    check('Sync — une divergence réelle, elle, est bel et bien soumise à l\'utilisateur',
-      questions === 1 && Store.conflit === true && Store.saveStatus === 'conflit',
-      `questions=${questions}`);
-    const res = Store.conflitInfo.resume.collections;
-    check('Sync — la question est chiffrée : qui, quand, et ce qui diffère de chaque côté',
-      Store.conflitInfo.distant.par.nom === 'iPhone' &&
-      Store.conflitInfo.distant.maj === '2026-08-31T12:00:00.000Z' &&
-      res.some(c => c.nom === 'goals' && c.ici > 0 && c.la === 1) &&
-      res.some(c => c.nom === 'transactions' && c.ici === 2 && c.la === 1),
-      JSON.stringify(res));
-    check('P1 — pendant une divergence, l\'appareil continue d\'enregistrer',
+
+    check('Sync — deux appareils qui ont travaillé chacun de leur côté ne posent plus de question',
+      questions === 0 && Store.conflit === false && Store.saveStatus === 'saved' && fusions.length === 1,
+      `questions=${questions}, fusions=${fusions.length}, statut=${Store.saveStatus}`);
+    const idsF = Store.state.goals.map(g => g.id).sort();
+    check("Fusion — tout ce qui existait d'un côté ou de l'autre est conservé",
+      idsF.join(',') === 'g1,g6,g9', idsF.join(','));
+    const libelles = Store.state.transactions.map(t => t.label).sort();
+    check("Fusion — une opération présente des deux côtés n'est pas dupliquée (EX-27)",
+      libelles.join('|') === 'BOULANGERIE|CAFE', libelles.join('|'));
+    check("Fusion — aucune fiche n'était réellement contestée, et le résultat est envoyé",
+      fusions[0].contestes.length === 0 &&
+      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).goals.length === 3,
+      JSON.stringify(fusions[0].contestes));
+    check("P1 — l'appareil a enregistré tout du long",
       (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).goals.some(g => g.id === 'g6'));
 
-    // Réunir les deux : tout est gardé, et le relevé importé des deux côtés
-    // ne double pas (EX-27).
-    await Store.fusionner();
-    const ids = Store.state.goals.map(g => g.id);
-    const libelles = Store.state.transactions.map(t => t.label).sort();
-    check('Fusion — tout ce qui existait d\'un côté ou de l\'autre est conservé',
-      ids.includes('g6') && ids.includes('g9') && ids.includes('g1'), ids.join(','));
-    check('Fusion — une opération présente des deux côtés n\'est pas dupliquée (EX-27)',
-      libelles.length === 2 && libelles.join('|') === 'BOULANGERIE|CAFE', libelles.join('|'));
-    check('Fusion — le résultat est envoyé et le conflit refermé',
-      Store.conflit === false && Store.saveStatus === 'saved' &&
-      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).transactions.length === 2);
+    // La MÊME fiche modifiée des deux côtés : celui qui écrit garde la sienne
+    // — c'est la modification en cours, donc la plus récente — et on le dit.
+    fusions = [];
+    Store._baseTexte = JSON.stringify(Store.documentSync());
+    const docConteste = JSON.parse(JSON.stringify(Store.documentSync()));
+    docConteste.goals = docConteste.goals.map(g => g.id === 'g1' ? { ...g, name: 'renommé ailleurs' } : g);
+    docConteste.maj = '2026-08-31T14:00:00.000Z';
+    docConteste.majPar = { id: 'appareil-b', nom: 'iPhone' };
+    await deposer(docConteste, 'conteste');
+    Store.state.goals = Store.state.goals.map(g => g.id === 'g1' ? { ...g, name: 'renommé ici' } : g);
+    await Store._doSave();
+    check('Fusion — sur une fiche modifiée des deux côtés, celui qui écrit garde la sienne',
+      Store.state.goals.find(g => g.id === 'g1').name === 'renommé ici' && questions === 0,
+      Store.state.goals.find(g => g.id === 'g1').name);
+    check('Fusion — la fiche disputée est signalée, pour pouvoir revenir en arrière',
+      fusions.length === 1 && fusions[0].contestes.join() === 'goals:g1' && !!fusions[0].annuler,
+      JSON.stringify(fusions[0] && fusions[0].contestes));
+
+    // Une suppression d'un côté tient, tant que l'autre n'a pas touché la fiche.
+    fusions = [];
+    Store._baseTexte = JSON.stringify(Store.documentSync());
+    const docSuppr = JSON.parse(JSON.stringify(Store.documentSync()));
+    docSuppr.goals = docSuppr.goals.filter(g => g.id !== 'g9');
+    docSuppr.maj = '2026-08-31T15:00:00.000Z';
+    await deposer(docSuppr, 'suppression');
+    Store.state.goals.push({ id: 'g10', name: 'ajouté pendant ce temps', target: 5 });
+    await Store._doSave();
+    const idsS = Store.state.goals.map(g => g.id).sort();
+    check("Fusion — une suppression faite ailleurs tient, et l'ajout fait ici est conservé",
+      !idsS.includes('g9') && idsS.includes('g10') && questions === 0, idsS.join(','));
+
+    // Revenir en arrière rend exactement l'état d'avant fusion.
+    const enveloppeAvantFusion = fusions[0].annuler;
+    await Store.annulerFusion(enveloppeAvantFusion);
+    check("Fusion — « revenir à ma version seule » rend l'état d'avant la fusion",
+      Store.state.goals.some(g => g.id === 'g9') && Store.state.goals.some(g => g.id === 'g10'),
+      Store.state.goals.map(g => g.id).join(','));
+    Store.onFusionAuto = null;
 
     // Hors ligne : l'enregistrement local aboutit, seule la synchronisation attend.
     Depot.ecrire = async () => { const e = new Error('HORS_LIGNE'); e.code = 'HORS_LIGNE'; throw e; };
