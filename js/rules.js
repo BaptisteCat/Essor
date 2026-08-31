@@ -484,4 +484,48 @@ const Rules = {
     if (n) Store.markDirty();
     return n;
   },
+
+  /* ---------- Doublons probables ----------
+     Le dédoublonnage d'import (EX-27) reconnaît une opération à son empreinte :
+     compte, date, montant, libellé. Il est infaillible sur le MÊME fichier
+     réimporté — mais deux exports de la même opération peuvent différer d'un
+     détail : la banque a changé de colonne de date (opération contre valeur),
+     ou de libellé entre deux formats. L'empreinte change, le doublon passe.
+     Un salaire compté deux fois fausse tout : revenus, budget, capacité
+     d'épargne. On cherche donc les paires qui se ressemblent trop — même
+     compte, même montant, même libellé normalisé, à quelques jours d'écart —
+     et on les SOUMET : deux cafés à quatre jours d'écart existent, seul
+     l'utilisateur peut trancher (P2, jamais de suppression silencieuse). */
+
+  doublonsSuspects() {
+    const S = Rules.S();
+    if (!S.dismissedDupes) S.dismissedDupes = [];
+    const paires = [];
+    const parCle = U.groupBy(S.transactions, t => `${t.accountId}|${t.amount}|${U.normLabel(t.label)}`);
+    for (const [, groupe] of parCle) {
+      if (groupe.length < 2) continue;
+      const tris = [...groupe].sort((a, b) => a.date < b.date ? -1 : 1);
+      for (let i = 0; i < tris.length - 1; i++) {
+        const a = tris[i], b = tris[i + 1];
+        const ecart = Rules._dayDiff(a.date, b.date);
+        // Même jour même libellé : déjà arbitré par l'import (deux cafés
+        // identiques sont légitimes). Suspect : proche mais PAS identique.
+        if (ecart < 1 || ecart > 4) continue;
+        const sig = [a.id, b.id].sort().join('~');
+        if (S.dismissedDupes.includes(sig)) continue;
+        paires.push({ sig, a, b, ecart,
+          // Les gros montants d'abord : c'est le salaire doublé qui fait mal.
+          poids: Math.abs(a.amount) });
+      }
+    }
+    return paires.sort((x, y) => y.poids - x.poids);
+  },
+
+  // L'utilisateur a tranché : ce sont deux opérations réelles.
+  dismissDupe(sig) {
+    const S = Rules.S();
+    if (!S.dismissedDupes) S.dismissedDupes = [];
+    if (!S.dismissedDupes.includes(sig)) S.dismissedDupes.push(sig);
+    Store.markDirty();
+  },
 };

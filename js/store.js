@@ -74,6 +74,8 @@ const Store = {
       },
       rules: [],          // {id, pattern, lineId, kind, internal} — règles utilisateur (EX-35)
       ambiguousMerchants: [], // libellés classés différemment selon les fois : jamais généralisés
+      dismissedDupes: [],     // paires jugées « deux vraies opérations » : ne plus les proposer
+      dismissedShifts: [],    // décalages écartés (EX-51)
       transactions: [],   // {id, accountId, date, amount, label, raw?, lineId?, auto?, internal?, pairId?, monthOverride?, hash}
       snapshots: {},      // "YYYY-MM" → {total, byAccount:{id:cents}, computedAt} — cache recalculable (EX-75)
       snapshotsDirty: true,

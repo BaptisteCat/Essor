@@ -8,6 +8,132 @@
 
 const ScreenPatrimoine = {
 
+  /* ---------- Mise en page mobile : un tableau de bord, pas un site replié ----------
+     Le téléphone a sa propre grammaire : un grand chiffre et sa courbe,
+     des pastilles qui se parcourent du pouce, la liste des comptes, la
+     répartition — puis les analyses lourdes en pages qu'on OUVRE. Rien du
+     PC n'est transposé, hormis le thème ; les moteurs de rendu, eux, sont
+     les mêmes — seule la scène change. */
+
+  _sparkline(values) {
+    if (values.length < 2) return '';
+    const W = 340, H = 64;
+    const min = Math.min(...values), max = Math.max(...values), amp = (max - min) || 1;
+    const pts = values.map((v, i) => [
+      (i / (values.length - 1)) * W,
+      H - 5 - ((v - min) / amp) * (H - 14),
+    ]);
+    const d = 'M' + pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L');
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="mob-spark" aria-hidden="true">
+      <defs><linearGradient id="mob-spark-g" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="rgba(243,201,107,0.30)"/>
+        <stop offset="1" stop-color="rgba(243,201,107,0)"/></linearGradient></defs>
+      <path d="${d} L${W},${H} L0,${H} Z" fill="url(#mob-spark-g)"/>
+      <path d="${d}" fill="none" stroke="#f3c96b" stroke-width="2" stroke-linejoin="round"/>
+    </svg>`;
+  },
+
+  mobileHtml(months, snaps, nw, prev, delta, perf) {
+    const cur = U.currentMonth();
+    const serie = months.slice(-12).map(m => snaps[m].total);
+    // ± value latente : ce que les positions valent au-delà de ce qu'elles ont coûté.
+    let latente = null;
+    for (const a of Store.state.accounts) {
+      if (a.closed) continue;
+      const g = Engine.latentGain(a.id);
+      if (g != null) latente = (latente || 0) + g;
+    }
+    const epargne = Alloc.plannedMonthlySavings();
+    const puce = (label, html) => `<div class="mob-puce"><div class="mob-puce-l">${label}</div><div class="mob-puce-v num">${html}</div></div>`;
+
+    const TYPE_GLYPHE = { courant: '€', livret: '◆', titres: '▲', pea: '▲', av: '✦', crypto: '₿', immo: '⌂', autre: '·' };
+    const comptes = Engine.accountsSorted().filter(a => !a.closed).map(a => {
+      const v = Engine.accountValue(a.id, U.today());
+      const t = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES.autre;
+      return `<button class="mob-compte" data-cpt="${a.id}">
+        <span class="mob-cpt-ico">${TYPE_GLYPHE[a.type] || '·'}</span>
+        <span class="mob-cpt-nom">${U.escapeHtml(a.name)}
+          <span class="small">${t.label}${v && !v.cashKnown ? ' · espèces non certifiées' : ''}</span></span>
+        <span class="mob-cpt-val num">${v ? U.fmtEUR(v.total) : '—'}</span>
+        <span class="fiche-chev">›</span>
+      </button>`;
+    }).join('');
+
+    return `
+      <div class="mob-hero">
+        <div class="kpi-label">Patrimoine net</div>
+        <div class="mob-montant num">${U.fmtEUR(nw.total)}</div>
+        <div class="mob-varia">${UI.varia(delta, { pct: prev && prev.total ? delta / prev.total : null })}
+          <span class="small">sur un mois</span></div>
+        ${ScreenPatrimoine._sparkline(serie)}
+      </div>
+
+      <div class="mob-puces">
+        ${puce('Performance du mois', UI.varia(perf.gain, { pct: perf.rate }))}
+        ${latente != null ? puce('± value latente', UI.varia(latente)) : ''}
+        ${epargne ? puce('Épargne prévue', U.fmtEUR(epargne) + '<span class="small"> /mois</span>') : ''}
+        ${nw.debts ? puce('Dettes', '<span class="down">−' + U.fmtEUR(nw.debts) + '</span>') : ''}
+      </div>
+
+      <h3 class="mob-section">Comptes</h3>
+      <div class="mob-comptes">${comptes}</div>
+
+      <h3 class="mob-section">Répartition</h3>
+      <div class="mob-repart" id="pat-alloc"></div>
+
+      <h3 class="mob-section">Analyses</h3>
+      <div class="card">
+        <h2>Projection <span class="small" id="proj-label"></span></h2>
+        <div class="toolbar">
+          <label style="margin:0">Horizon
+            <select id="proj-horizon">
+              ${[24, 60, 120, 240, 360].map(h => `<option value="${h}" ${h === (Store.state.settings.horizonMonths || 120) ? 'selected' : ''}>${h / 12} ans</option>`).join('')}
+            </select>
+          </label>
+          <label style="margin:0 0 0 6px">Épargne mensuelle simulée
+            ${UI.amountInput('proj-epargne', Projection.monthlySavings())}
+          </label>
+          <button class="ghost" id="proj-ep-prev" title="Revenus prévus moins dépenses prévues">déduire du prévisionnel</button>
+          <button class="ghost" id="proj-ep-reel" title="Moyenne des derniers mois complets">du réel constaté</button>
+          <button class="ghost" id="proj-ep-budget" title="Somme de vos lignes d'épargne au budget">de mes versements</button>
+        </div>
+        <div class="hint" id="proj-ep-source"></div>
+        <div class="chart-holder" id="pat-proj"></div>
+        <div id="proj-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Historique mensuel</h2>
+        <div class="chart-holder" id="pat-history"></div>
+        <div class="hint">Un mois révolu vaut le patrimoine à son dernier jour ; le mois en cours, le patrimoine du jour.</div>
+      </div>
+      <div class="card">
+        <h2 id="pat-geo-title">Exposition géographique</h2>
+        <div id="pat-geo"></div>
+      </div>
+      <div class="card">
+        <h2>Épargne du mois — comment répartir</h2>
+        <div id="pat-assist"></div>
+      </div>
+      <div class="card">
+        <h2>Objectifs &amp; rente</h2>
+        <div id="pat-goals"></div>
+      </div>
+    `;
+  },
+
+  // La liste des comptes mène à l'action naturelle de chacun : déclarer ses
+  // actifs pour la crypto, ses positions pour un compte-titres, certifier son
+  // solde pour le reste.
+  wireComptesMobile() {
+    document.querySelectorAll('[data-cpt]').forEach(b => b.onclick = () => {
+      const a = Engine.account(b.dataset.cpt);
+      if (!a) return;
+      if (a.type === 'crypto') ScreenOperations.actifsModal(a.id);
+      else if (ACCOUNT_TYPES[a.type]?.positions) ScreenOperations.positionsModal(a.id);
+      else ScreenOperations.certifyModal(a.id);
+    });
+  },
+
   render() {
     document.getElementById('screen-title').innerHTML =
       `<h1>Patrimoine</h1><div class="small">Photo au ${U.fmtDate(U.today())} — les saisies se font dans les autres espaces</div>`;
@@ -32,6 +158,19 @@ const ScreenPatrimoine = {
     const prev = snaps[U.addMonths(cur, -1)];
     const delta = prev ? nw.total - prev.total : null;
     const perf = Engine.monthlyPerformance(cur);
+
+    if (UI.estMobile()) {
+      el.innerHTML = ScreenPatrimoine.mobileHtml(months, snaps, nw, prev, delta, perf);
+      ScreenPatrimoine.renderAllocation();
+      ScreenPatrimoine.renderHistory(months, snaps);
+      ScreenPatrimoine.renderGeo();
+      ScreenPatrimoine.renderProjection();
+      ScreenPatrimoine.renderAssistant();
+      ScreenPatrimoine.renderGoals();
+      ScreenPatrimoine.wireComptesMobile();
+      ScreenPatrimoine.wireProjection();
+      return;
+    }
 
     el.innerHTML = `
       <div class="grid c3">
@@ -110,6 +249,11 @@ const ScreenPatrimoine = {
     ScreenPatrimoine.renderAssistant();
     ScreenPatrimoine.renderGoals();
 
+    ScreenPatrimoine.wireProjection();
+  },
+
+  // Le câblage des commandes de projection, commun aux deux scènes.
+  wireProjection() {
     document.getElementById('proj-horizon').onchange = (e) => {
       Store.state.settings.horizonMonths = Number(e.target.value);
       Store.markDirty();

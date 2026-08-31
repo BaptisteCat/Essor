@@ -16,6 +16,7 @@ const ScreenOperations = {
       `<h1>Opérations</h1><div class="small">Période analysée : ${UI.periodLabel()}</div>`;
     const el = document.getElementById('content-inner');
     el.innerHTML = `
+      <div id="op-doublons"></div>
       <div class="card dropzone" id="op-accounts-card">
         <div class="toolbar">
           <h2 style="margin:0">Comptes</h2>
@@ -61,6 +62,7 @@ const ScreenOperations = {
         <div id="op-list"></div>
       </div>`;
 
+    ScreenOperations.renderDoublons();
     ScreenOperations.renderAccounts();
     ScreenOperations.renderList();
     ScreenOperations.wireDropZone();
@@ -142,6 +144,63 @@ const ScreenOperations = {
       if (posBtn) posBtn.onclick = () => (Engine.account(id).type === 'crypto'
         ? ScreenOperations.actifsModal(id)
         : ScreenOperations.positionsModal(id));
+    });
+  },
+
+  /* ---------- Doublons probables ---------- */
+
+  renderDoublons() {
+    const holder = document.getElementById('op-doublons');
+    if (!holder) return;
+    const paires = Rules.doublonsSuspects();
+    if (!paires.length) { holder.innerHTML = ''; return; }
+    const total = U.sum(paires, p => Math.abs(p.a.amount));
+    holder.innerHTML = `
+      <div class="card">
+        <h2>Doublons probables — ${paires.length} paire${paires.length > 1 ? 's' : ''},
+          ${U.fmtEUR(total)} en jeu</h2>
+        <p class="small">Ces opérations se ressemblent trop : même compte, même montant, même libellé,
+        à quelques jours d'écart. Deux exports d'un même relevé peuvent différer d'un détail — la
+        colonne de date, le libellé — et l'empreinte anti-doublon ne les voit alors plus. Un salaire
+        compté deux fois fausse tout : à vous de trancher, rien n'est supprimé sans vous.</p>
+        <div style="overflow-x:auto"><table>
+          <tr><th>Libellé</th><th class="num">Montant</th><th>Dates</th><th></th></tr>
+          ${paires.slice(0, 12).map(p => `<tr>
+            <td>${U.escapeHtml(p.a.label.slice(0, 42))}
+              <div class="small">${U.escapeHtml(Engine.account(p.a.accountId)?.name || '')}</div></td>
+            <td class="num stat-val">${U.fmtEUR(p.a.amount)}</td>
+            <td class="num">${U.fmtDate(p.a.date)}<br>${U.fmtDate(p.b.date)}</td>
+            <td class="num" style="white-space:nowrap">
+              <button class="ghost" data-dsup="${p.a.id}" data-sig="${p.sig}"
+                title="Supprimer celle du ${U.fmtDate(p.a.date)}">✕ ${U.fmtDate(p.a.date).slice(0, 5)}</button>
+              <button class="ghost" data-dsup="${p.b.id}" data-sig="${p.sig}"
+                title="Supprimer celle du ${U.fmtDate(p.b.date)}">✕ ${U.fmtDate(p.b.date).slice(0, 5)}</button>
+              <button class="ghost" data-dok="${p.sig}" title="Ce sont deux opérations réelles">réelles</button>
+            </td></tr>`).join('')}
+        </table></div>
+        ${paires.length > 12 ? `<div class="hint">${paires.length - 12} paire(s) de moindre montant suivront.</div>` : ''}
+      </div>`;
+    holder.querySelectorAll('[data-dsup]').forEach(b => b.onclick = () => {
+      const t = Store.state.transactions.find(x => x.id === b.dataset.dsup);
+      if (!t) return;
+      const garde = { ...t };
+      Store.state.transactions = Store.state.transactions.filter(x => x.id !== t.id);
+      Rules.dismissDupe(b.dataset.sig);   // la paire est tranchée
+      Engine.invalidate();
+      Store.markDirty();
+      ScreenOperations.render();
+      UI.toastAction(`Doublon supprimé : ${U.escapeHtml(t.label.slice(0, 30))} du ${U.fmtDate(t.date)}.`,
+        'Annuler', () => {
+          Store.state.transactions.push(garde);
+          Store.state.dismissedDupes = Store.state.dismissedDupes.filter(x => x !== b.dataset.sig);
+          Engine.invalidate();
+          Store.markDirty();
+          ScreenOperations.render();
+        });
+    });
+    holder.querySelectorAll('[data-dok]').forEach(b => b.onclick = () => {
+      Rules.dismissDupe(b.dataset.dok);
+      ScreenOperations.renderDoublons();
     });
   },
 
