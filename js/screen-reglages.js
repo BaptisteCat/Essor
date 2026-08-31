@@ -627,8 +627,11 @@ const ScreenReglages = {
             ${UI.secret('rg-fmp', { placeholder: 'collez votre clé', autocomplete: 'off' })}</div>
           <button id="rg-fetch-geo">Récupérer les poids réels en ligne</button>
         </div>
-        <div class="hint">Sans clé, tout fonctionne hors ligne. Avec une clé, seul le code du
-          support sort de la machine — comme pour les cours.</div>
+        <div class="hint">Sans clé, tout fonctionne hors ligne : la répartition est déduite des poids
+          publiés de l'indice suivi, ce qui suffit pour un patrimoine personnel. Les poids <b>réels</b>
+          du fonds sont, depuis 2025, un accès <b>payant</b> chez Financial Modeling Prep — une clé
+          gratuite répondra « non inclus dans votre formule ». Avec une clé, seul le code du support
+          sort de la machine, comme pour les cours.</div>
       </div>
       <div class="notice" style="margin-top:12px">
         <b>Arrondis convertis en bitcoin.</b> Si votre carte arrondit chaque paiement et
@@ -788,7 +791,7 @@ const ScreenReglages = {
     Store.markDirty();
     const symbols = [...new Set(S.positionSnapshots.map(p => p.symbol))];
     if (!symbols.length) { UI.toast('Aucun support à mettre à jour.'); return; }
-    let ok = 0;
+    let ok = 0, abonnement = null;
     const absents = [], erreurs = [];
     for (const sym of symbols) {
       if (S.geoSource?.[sym] === 'manuel') continue;   // une saisie manuelle fait foi (P6)
@@ -800,14 +803,21 @@ const ScreenReglages = {
         delete S.geoIndice[sym];
         ok++;
       } catch (err) {
+        if (err.code === 'ABONNEMENT') { abonnement = err.message; break; }   // inutile d'insister
         erreurs.push(`${sym} : ${err.message}`);
       }
     }
     Engine.invalidate();
     ScreenReglages.renderSymbols();
-    if (erreurs.length) {
+    if (abonnement) {
+      // Ne pas laisser croire à une erreur de manipulation : la clé est bonne,
+      // c'est l'accès qui est payant. Et l'application n'en a pas besoin.
+      UI.error(`Poids réels indisponibles : ${abonnement}.`,
+        "Votre clé est valide — cet accès précis est payant. Essor continue de déduire la " +
+        "répartition des poids publiés de l'indice suivi, ce qui suffit pour un patrimoine personnel.");
+    } else if (erreurs.length) {
       UI.error(`Récupération impossible — ${erreurs[0]}.`,
-        'Vérifiez la clé et la connexion. La répartition déduite de l\'indice reste en place.');
+        "La répartition déduite de l'indice reste en place.");
     } else {
       UI.toast(`${ok} support(s) mis à jour avec les poids réels.` +
         (absents.length ? ` Inconnus du fournisseur, déduction conservée : ${absents.map(U.escapeHtml).join(', ')}.` : ''));

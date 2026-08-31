@@ -128,16 +128,33 @@ const Indices = {
 
   /* ---------- Enrichissement en ligne, facultatif ----------
      Financial Modeling Prep expose les poids par pays réellement constatés
-     dans le fonds et autorise l'appel depuis une page locale. Une clé
-     gratuite est nécessaire ; sans elle, la déduction hors ligne ci-dessus
-     suffit. Seul le code du support sort de la machine, comme pour les cours
-     (EX-99). */
+     dans le fonds, et autorise l'appel depuis une page locale. Sans clé — ou
+     sans abonnement couvrant cet accès — la déduction hors ligne ci-dessus
+     suffit : elle donne les poids publiés de l'indice suivi. Seul le code du
+     support sort de la machine, comme pour les cours (EX-99).
+
+     L'API v3 a été retirée le 31 août 2025 ; l'adresse actuelle est /stable/.
+     Les codes d'erreur y ont chacun leur sens, et les confondre envoyait
+     chercher un problème de clé là où il n'y en avait pas. */
   async fetchOnline(symbol, key) {
-    const url = `https://financialmodelingprep.com/api/v3/etf-country-weightings/${encodeURIComponent(symbol)}?apikey=${encodeURIComponent(key)}`;
-    const r = await fetch(url);
+    const url = `https://financialmodelingprep.com/stable/etf/country-weightings` +
+      `?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(key)}`;
+    let r;
+    try { r = await fetch(url); }
+    catch { throw new Error('fournisseur injoignable — vérifiez la connexion'); }
+    if (r.status === 401 || r.status === 403) {
+      throw new Error('clé refusée par le fournisseur (invalide, expirée, ou adresse obsolète)');
+    }
+    if (r.status === 402) {
+      const e = new Error("la répartition par pays n'est pas incluse dans votre formule " +
+        "Financial Modeling Prep — c'est un accès payant depuis 2025");
+      e.code = 'ABONNEMENT';
+      throw e;
+    }
+    if (r.status === 429) throw new Error("trop d'appels au fournisseur — réessayez dans un moment");
     if (!r.ok) throw new Error(`réponse ${r.status} du fournisseur de données`);
     const data = await r.json();
-    if (data['Error Message']) throw new Error(data['Error Message']);
+    if (data && data['Error Message']) throw new Error(data['Error Message']);
     if (!Array.isArray(data) || !data.length) return null;   // support inconnu du fournisseur
     const geo = {};
     let total = 0;

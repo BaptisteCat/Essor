@@ -263,24 +263,27 @@ const ScreenOperations = {
     USDT: 'tether', USDC: 'usd-coin', DAI: 'dai',
   },
 
-  // « BTC/EUR », « BTC-EUR », « BTCEUR » ou simplement « BTC » → {actif, contre}.
-  lirePaire(saisie) {
+  // On saisit un ACTIF — BTC, ETH, BNB — pas une paire : la devise est celle du
+  // prix, pas de l'actif. Une paire écrite par habitude (« BTC/EUR ») n'est
+  // pourtant pas refusée : on en retient l'actif, c'est ce qu'elle désigne.
+  lireActif(saisie) {
     const t = String(saisie || '').trim().toUpperCase().replace(/\s+/g, '');
-    if (!t) return null;
-    let m = t.match(/^([A-Z0-9]{2,10})[/\-:]([A-Z]{3,5})$/);
-    if (m) return { actif: m[1], contre: m[2] };
-    m = t.match(/^([A-Z0-9]{2,10})(EUR|USD|USDT|USDC)$/);
-    if (m) return { actif: m[1], contre: m[2] };
-    return { actif: t, contre: 'EUR' };
+    if (!t) return '';
+    const m = t.match(/^([A-Z0-9]{2,10})[/\-:](?:EUR|USD|USDT|USDC|GBP|CHF)$/);
+    return m ? m[1] : t;
   },
+
+  // Devises de saisie. Tout est valorisé en euros : une saisie faite dans une
+  // autre monnaie est convertie à un taux que l'utilisateur voit et corrige.
+  DEVISES: ['EUR', 'USD', 'USDT', 'USDC', 'GBP', 'CHF'],
 
   /* ---------- Positions et actifs (EX-11, EX-12) ---------- */
 
-  positionsModal(accountId) {
+  positionsModal(accountId, edition) {
     const a = Engine.account(accountId);
     const t = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES.autre;
     // Vocabulaire du compte : « Positions / Support / PRU » pour un
-    // compte-titres, « Actifs / Paire / Prix moyen d'achat » pour la crypto.
+    // compte-titres, « Actifs / Actif / Prix moyen d'achat » pour la crypto.
     const MOT = {
       titre: t.motPositions || 'Positions',
       support: t.motSupport || 'Support',
@@ -306,12 +309,15 @@ const ScreenOperations = {
       totalValeur += d.value;
       const nom = (Store.state.priceMeta[d.symbol] || {}).name;
       return `<tr>
-        <td>${U.escapeHtml(d.symbol)}${crypto ? '<span class="small">/EUR</span>' : ''}
+        <td>${U.escapeHtml(d.symbol)}
           ${nom ? `<div class="small">${U.escapeHtml(nom)}</div>` : ''}
-          <div class="small seul-mobile" title="${U.escapeHtml(MOT.pru)}">payé ${pru ? U.fmtPrice(pru) : '—'}</div></td>
+          <div class="small seul-mobile clickable" data-pru="${U.escapeHtml(d.symbol)}"
+            >payé ${pru ? U.fmtPrice(pru) : '—'} ✎</div></td>
         <td class="num">${qte(d.qty)}</td>
         <td class="num col-large">${d.price != null ? U.fmtPrice(d.price) : '—'}${d.approx ? ' <span class="badge cuivre" title="cours daté du ' + U.fmtDate(d.priceDate) + '">approx.</span>' : ''}</td>
-        <td class="num col-large">${pru ? U.fmtPrice(pru) : '<span class="muted">non renseigné</span>'}</td>
+        <td class="num col-large clickable" data-pru="${U.escapeHtml(d.symbol)}"
+            title="Cliquez pour corriger ${U.escapeHtml(MOT.pru.toLowerCase())}">
+          ${pru ? U.fmtPrice(pru) : '<span class="muted">non renseigné</span>'} <span class="small">✎</span></td>
         <td class="num col-large">${investi != null ? U.fmtEUR(investi) : '—'}</td>
         <td class="num">${gain != null ? UI.varia(gain) : '—'}
           ${gain != null && investi ? `<div class="small seul-mobile">${pct(gain, investi)}</div>` : ''}</td>
@@ -319,7 +325,24 @@ const ScreenOperations = {
         <td class="num stat-val">${U.fmtEUR(d.value)}</td></tr>`;
     }).join('');
 
+    // Les mouvements déclarés à la main : c'est là qu'une faute de frappe se
+    // corrige ou s'efface. Sans cette liste, une erreur de saisie était
+    // définitive — on ne voyait plus que son résultat agrégé.
+    const mvts = Store.state.trades
+      .filter(x => x.accountId === accountId)
+      .sort((x, y) => (y.date + y.id).localeCompare(x.date + x.id));
+    const lignesMvt = mvts.map(x => `<tr${edition === x.id ? ' class="selected"' : ''}>
+      <td>${U.fmtDate(x.date)}</td>
+      <td>${U.escapeHtml(x.symbol)}</td>
+      <td class="num ${x.qtyDelta < 0 ? 'down' : 'up'}">${x.qtyDelta > 0 ? '+' : ''}${qte(x.qtyDelta)}</td>
+      <td class="num col-large">${x.priceCents ? U.fmtPrice(x.priceCents) : '—'}</td>
+      <td class="num">
+        <button class="ghost" data-mod="${x.id}" title="Corriger ce mouvement">✎</button>
+        <button class="ghost" data-suppr="${x.id}" title="Supprimer ce mouvement">✕</button></td></tr>`).join('');
+
     const gainTotal = tousPru && totalInvesti ? totalValeur - totalInvesti : null;
+    const enEdition = edition ? mvts.find(x => x.id === edition) : null;
+
     const m = UI.modal(`
       <h2>${MOT.titre} — ${U.escapeHtml(a.name)}</h2>
       <p class="small">Vous saisissez ce que vous détenez (quantités) et ce que vous l'avez payé
@@ -341,33 +364,121 @@ const ScreenOperations = {
       </table></div>` : `<div class="empty">Aucun ${crypto ? 'actif' : 'support'} déclaré.</div>`}
       ${!tousPru && v.detail.length ? `<div class="notice">Sans ${MOT.pru.toLowerCase()}, la plus ou
         moins-value ne peut pas être calculée — c'est la seule saisie qu'Essor ne sait pas déduire
-        de vos relevés.</div>` : ''}
+        de vos relevés. Cliquez la colonne pour la renseigner.</div>` : ''}
 
-      <h3 style="margin-top:14px">${crypto ? 'Déclarer un achat ou une vente' : 'Déclarer un mouvement de titres'}</h3>
+      ${mvts.length ? `<h3 style="margin-top:16px">Mouvements déclarés</h3>
+      <div style="overflow-x:auto"><table>
+        <tr><th>Date</th><th>${MOT.support}</th><th class="num">Quantité</th>
+          <th class="num col-large">Cours</th><th class="num"></th></tr>
+        ${lignesMvt}
+      </table></div>
+      <div class="hint">✎ corrige, ✕ supprime — une suppression reste annulable le temps du message.</div>` : ''}
+
+      <h3 style="margin-top:16px">${enEdition ? 'Corriger le mouvement' : (crypto ? 'Déclarer un achat ou une vente' : 'Déclarer un mouvement de titres')}</h3>
       <div class="row">
         <div class="field"><label>${MOT.support}</label>
-          <input id="ps-sym" placeholder="${MOT.exemple}" size="14" autocapitalize="characters" spellcheck="false"></div>
+          <input id="ps-sym" placeholder="${MOT.exemple}" size="14" autocapitalize="characters" spellcheck="false"
+            value="${enEdition ? U.escapeHtml(enEdition.symbol) : ''}"></div>
         <div class="field"><label>Quantité <span class="small">(négative pour une vente)</span></label>
-          <input id="ps-qty" class="amount" size="10" placeholder="${crypto ? '0,05' : '10'}"></div>
-        <div class="field"><label>Date</label><input type="date" id="ps-date" value="${today}"></div>
-        <div class="field"><label>Cours unitaire</label>${UI.amountInput('ps-price', null, crypto ? '58 400,00' : '87,42')}</div>
+          <input id="ps-qty" class="amount" size="10" placeholder="${crypto ? '0,05' : '10'}"
+            value="${enEdition ? String(enEdition.qtyDelta).replace('.', ',') : ''}"></div>
+        <div class="field"><label>Date</label>
+          <input type="date" id="ps-date" value="${enEdition ? enEdition.date : today}"></div>
+        <div class="field"><label>Cours unitaire</label>
+          ${UI.amountInput('ps-price', enEdition ? enEdition.priceCents : null, crypto ? '58 400,00' : '87,42')}</div>
         <div class="field"><label>${MOT.pru}</label>${UI.amountInput('ps-pru', null)}</div>
-        <button class="primary" id="ps-add">Ajouter</button>
+        ${crypto ? `<div class="field"><label>Devise des prix</label>
+          <select id="ps-dev">${ScreenOperations.DEVISES.map(x =>
+            `<option ${x === 'EUR' ? 'selected' : ''}>${x}</option>`).join('')}</select></div>` : ''}
+        <button class="primary" id="ps-add">${enEdition ? 'Enregistrer la correction' : 'Ajouter'}</button>
+        ${enEdition ? '<button class="ghost" id="ps-annuler">Abandonner</button>' : ''}
       </div>
+      ${crypto ? `<div id="ps-change" style="display:none">
+        <div class="row" style="margin-top:6px">
+          <div class="field"><label>Taux de change au jour de l'achat</label>
+            <span class="num">1 <b id="ps-dev-nom">USD</b> =</span>
+            ${UI.amountInput('ps-taux', null, '0,92')} <span class="small">€</span></div>
+          <div class="field"><div class="hint" id="ps-apercu">&nbsp;</div></div>
+        </div>
+        <div class="hint">Essor valorise tout en euros : sans ce taux, la plus-value serait celle
+        d'une autre monnaie. Le dernier taux utilisé pour cette devise est proposé.</div>
+      </div>` : ''}
       <div class="hint">${crypto
-        ? "La paire s'écrit BTC/EUR. Laissez le prix moyen d'achat vide et le cours saisi en tient lieu — commode pour un premier achat."
+        ? "Saisissez l'actif seul : BTC, ETH, BNB. Laissez le prix moyen d'achat vide et le cours saisi en tient lieu — commode pour un premier achat."
         : "Les achats importés d'un relevé de courtier (colonnes ISIN + quantité) créent ces mouvements automatiquement."}</div>
       <div class="erreur" id="ps-err"></div>
       <div class="actions"><button class="ghost" data-x="cancel">Fermer</button></div>`);
 
     m.el.querySelector('[data-x="cancel"]').onclick = m.close;
+    const rouvrir = (ed) => { m.close(); ScreenOperations.positionsModal(accountId, ed); };
+    const bAnnuler = m.el.querySelector('#ps-annuler');
+    if (bAnnuler) bAnnuler.onclick = () => rouvrir(null);
+
+    // La devise ne se demande que si elle sort de l'euro, et le taux avec elle.
+    const selDev = m.el.querySelector('#ps-dev');
+    const majChange = () => {
+      const dev = selDev.value;
+      const bloc = m.el.querySelector('#ps-change');
+      bloc.style.display = dev === 'EUR' ? 'none' : 'block';
+      if (dev === 'EUR') return;
+      m.el.querySelector('#ps-dev-nom').textContent = dev;
+      const champTaux = m.el.querySelector('#ps-taux');
+      const memoire = (Store.state.settings.tauxChange || {})[dev];
+      if (!champTaux.value && memoire) champTaux.value = (memoire / 10000).toLocaleString('fr-FR');
+      const apercu = () => {
+        const taux = UI.readAmount(champTaux);
+        const prix = UI.readAmount(m.el.querySelector('#ps-price'));
+        const pru = UI.readAmount(m.el.querySelector('#ps-pru'));
+        const conv = (x) => x != null && taux ? U.fmtEUR(U.roundCents(x * taux / 10000)) : '—';
+        m.el.querySelector('#ps-apercu').innerHTML = taux
+          ? `soit ${conv(prix)} le cours, ${conv(pru)} le prix moyen`
+          : 'renseignez le taux pour voir les montants en euros';
+      };
+      champTaux.oninput = apercu;
+      m.el.querySelector('#ps-price').oninput = apercu;
+      m.el.querySelector('#ps-pru').oninput = apercu;
+      apercu();
+    };
+    if (selDev) { selDev.onchange = majChange; majChange(); }
+
+    // Corriger le prix moyen d'achat sans repasser par un mouvement.
+    m.el.querySelectorAll('[data-pru]').forEach(cell => cell.onclick = () => {
+      const sym = cell.dataset.pru;
+      ScreenOperations.pruModal(accountId, sym, MOT, () => rouvrir(edition));
+    });
+
+    // Corriger un mouvement : il revient dans le formulaire.
+    m.el.querySelectorAll('[data-mod]').forEach(b => b.onclick = () => rouvrir(b.dataset.mod));
+
+    // Supprimer : immédiat, mais annulable le temps du message — une faute de
+    // frappe se corrige d'un geste, et rien ne se perd sans recours (P1).
+    m.el.querySelectorAll('[data-suppr]').forEach(b => b.onclick = () => {
+      const id = b.dataset.suppr;
+      const i = Store.state.trades.findIndex(x => x.id === id);
+      if (i < 0) return;
+      const [retire] = Store.state.trades.splice(i, 1);
+      Engine.invalidate();
+      Store.markDirty();
+      rouvrir(edition === id ? null : edition);
+      UI.toastAction(
+        `Mouvement supprimé : ${qte(retire.qtyDelta)} ${U.escapeHtml(retire.symbol)} du ${U.fmtDate(retire.date)}.`,
+        'Annuler la suppression',
+        () => {
+          Store.state.trades.push(retire);
+          Engine.invalidate();
+          Store.markDirty();
+          document.querySelectorAll('.modal-back').forEach(x => x.remove());
+          ScreenOperations.positionsModal(accountId, edition);
+        });
+    });
+
     m.el.querySelector('#ps-add').onclick = () => {
       const err = m.el.querySelector('#ps-err');
       err.textContent = '';
       const saisie = m.el.querySelector('#ps-sym').value;
       const qty = Number(String(m.el.querySelector('#ps-qty').value).replace(',', '.'));
       const date = m.el.querySelector('#ps-date').value;
-      const price = UI.readAmount(m.el.querySelector('#ps-price'));
+      let price = UI.readAmount(m.el.querySelector('#ps-price'));
       let pru = UI.readAmount(m.el.querySelector('#ps-pru'));
       if (!saisie.trim() || !qty || Number.isNaN(qty) || !date) {
         err.textContent = `${MOT.support}, quantité ou date manquant.`;
@@ -375,13 +486,20 @@ const ScreenOperations = {
       }
       let sym = saisie.trim().toUpperCase();
       if (crypto) {
-        const paire = ScreenOperations.lirePaire(saisie);
-        sym = paire.actif;
-        // Tout est valorisé en euros : une paire cotée ailleurs fausserait le
-        // patrimoine sans prévenir.
-        if (paire.contre !== 'EUR') {
-          err.textContent = `Essor valorise en euros : saisissez ${sym}/EUR, et le cours en euros.`;
-          return;
+        sym = ScreenOperations.lireActif(saisie);
+        // Les prix saisis dans une autre monnaie sont ramenés à l'euro, unité
+        // de tout le reste de l'application, au taux affiché.
+        const dev = selDev ? selDev.value : 'EUR';
+        if (dev !== 'EUR') {
+          const taux = UI.readAmount(m.el.querySelector('#ps-taux'));
+          if (!taux) {
+            err.textContent = `Indiquez combien vaut 1 ${dev} en euros : sans ce taux, la plus-value serait fausse.`;
+            return;
+          }
+          const enEuros = (x) => x == null ? null : U.roundCents(x * taux / 10000);
+          price = enEuros(price);
+          pru = enEuros(pru);
+          Store.state.settings.tauxChange = { ...(Store.state.settings.tauxChange || {}), [dev]: taux };
         }
         const meta = Store.state.priceMeta[sym] || {};
         const cg = ScreenOperations.CRYPTO_CONNUES[sym];
@@ -389,13 +507,50 @@ const ScreenOperations = {
         // Premier achat sans prix de revient : le cours saisi en tient lieu.
         if (!pru && price && qty > 0 && !Store.state.pru[sym]) pru = price;
       }
-      Store.state.trades.push({ id: U.uid(), accountId, symbol: sym, date, qtyDelta: qty, priceCents: price || null });
+      if (enEdition) {
+        Object.assign(enEdition, { symbol: sym, date, qtyDelta: qty, priceCents: price || null });
+      } else {
+        Store.state.trades.push({ id: U.uid(), accountId, symbol: sym, date, qtyDelta: qty, priceCents: price || null });
+      }
       if (price) Engine.setPrice(sym, date, price);
       if (pru) Store.state.pru[sym] = pru;
       Engine.invalidate();
       Store.markDirty();
+      rouvrir(null);
+      if (enEdition) UI.toast('Mouvement corrigé.');
+    };
+  },
+
+  // Correction du prix moyen d'achat d'un support, indépendamment des
+  // mouvements : c'est souvent lui qu'on saisit de travers.
+  pruModal(accountId, sym, MOT, apres) {
+    const actuel = Store.state.pru[sym];
+    const m = UI.modal(`
+      <h2>${U.escapeHtml(MOT.pru)} — ${U.escapeHtml(sym)}</h2>
+      <p class="small">Ce que vous avez payé en moyenne, par unité, tous achats confondus. C'est de
+      lui que découle la plus ou moins-value ; il n'a aucun effet sur la valeur du portefeuille.</p>
+      <div class="row">
+        <div class="field"><label>${U.escapeHtml(MOT.pru)} en euros</label>${UI.amountInput('pru-v', actuel || null)}</div>
+        <button class="primary" data-x="ok">Enregistrer</button>
+        ${actuel ? '<button class="danger" data-x="raz">Effacer</button>' : ''}
+      </div>
+      <div class="actions"><button class="ghost" data-x="cancel">Annuler</button></div>`);
+    m.el.querySelector('[data-x="cancel"]').onclick = m.close;
+    m.el.querySelector('[data-x="ok"]').onclick = () => {
+      const v = UI.readAmount(m.el.querySelector('#pru-v'));
+      if (v) Store.state.pru[sym] = v; else delete Store.state.pru[sym];
+      Engine.invalidate();
+      Store.markDirty();
       m.close();
-      ScreenOperations.positionsModal(accountId);
+      apres();
+    };
+    const raz = m.el.querySelector('[data-x="raz"]');
+    if (raz) raz.onclick = () => {
+      delete Store.state.pru[sym];
+      Engine.invalidate();
+      Store.markDirty();
+      m.close();
+      apres();
     };
   },
 

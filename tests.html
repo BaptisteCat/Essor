@@ -627,20 +627,23 @@ try {
 
   /* ---- Portefeuille crypto : des actifs, des paires, une plus-value ---- */
   {
-    check("Crypto — le compte parle d'actifs et de paires, pas de positions et d'ISIN",
+    check("Crypto — le compte parle d'actifs, pas de positions et d'ISIN",
       ACCOUNT_TYPES.crypto.motPositions === 'Actifs' &&
-      ACCOUNT_TYPES.crypto.motSupport === 'Paire' &&
-      ACCOUNT_TYPES.crypto.exempleSupport === 'BTC/EUR' &&
+      ACCOUNT_TYPES.crypto.motSupport === 'Actif' &&
+      ACCOUNT_TYPES.crypto.exempleSupport === 'BTC' &&
       ACCOUNT_TYPES.titres.motPositions === undefined,
       JSON.stringify([ACCOUNT_TYPES.crypto.motPositions, ACCOUNT_TYPES.crypto.motSupport]));
 
-    const p = (x) => { const r = ScreenOperations.lirePaire(x); return r.actif + '/' + r.contre; };
-    check('Crypto — la paire se lit sous toutes ses écritures courantes',
-      p('BTC/EUR') === 'BTC/EUR' && p('btc-eur') === 'BTC/EUR' && p('BTCEUR') === 'BTC/EUR' &&
-      p(' eth / eur ') === 'ETH/EUR' && p('SOL') === 'SOL/EUR',
-      [p('BTC/EUR'), p('btc-eur'), p('BTCEUR'), p('SOL')].join(' · '));
-    check("Crypto — une paire cotée ailleurs qu'en euros est reconnue comme telle",
-      p('SOL/USDT') === 'SOL/USDT' && p('ETH/USD') === 'ETH/USD');
+    // Un actif se saisit seul — BTC, ETH, BNB — la devise porte sur le prix.
+    const act = (x) => ScreenOperations.lireActif(x);
+    check("Crypto — on saisit l'actif seul, pas une paire",
+      act('BTC') === 'BTC' && act(' eth ') === 'ETH' && act('bnb') === 'BNB');
+    check("Crypto — une paire écrite par habitude n'est pas refusée : on en retient l'actif",
+      act('BTC/EUR') === 'BTC' && act('btc-usdt') === 'BTC' && act('ETH/USD') === 'ETH',
+      [act('BTC/EUR'), act('btc-usdt')].join(' · '));
+    check('Crypto — la devise de saisie est proposée, euro par défaut',
+      ScreenOperations.DEVISES[0] === 'EUR' && ScreenOperations.DEVISES.includes('USD') &&
+      ScreenOperations.DEVISES.includes('USDT'));
     check('Crypto — les actifs courants portent leur identifiant CoinGecko',
       ScreenOperations.CRYPTO_CONNUES.BTC === 'bitcoin' &&
       ScreenOperations.CRYPTO_CONNUES.ETH === 'ethereum' &&

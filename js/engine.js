@@ -25,8 +25,8 @@ const ACCOUNT_TYPES = {
   // valorisation au cours — sous les mots justes.
   crypto:  { label: 'Crypto',         classe: 'Crypto', invest: true, positions: true,
              cashClasse: 'Espèces sur compte crypto',
-             motPositions: 'Actifs', motPosition: 'Actif', motSupport: 'Paire',
-             exempleSupport: 'BTC/EUR', motPru: "Prix moyen d'achat", decimales: 8 },
+             motPositions: 'Actifs', motPosition: 'Actif', motSupport: 'Actif',
+             exempleSupport: 'BTC', motPru: "Prix moyen d'achat", decimales: 8 },
   immo:    { label: 'Immobilier',     classe: 'Immobilier', invest: false, positions: false },
   autre:   { label: 'Autre',          classe: 'Autre', invest: false, positions: false },
 };
