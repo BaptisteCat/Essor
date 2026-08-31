@@ -92,6 +92,17 @@ d'accès — s'affiche d'une pression sur l'œil.
    Le QIF n'ayant pas d'ordre de date normalisé, celui du relevé est **déduit**
    du fichier entier plutôt que supposé ; le compte déclaré par un bloc
    `!Account` sert d'indice de rattachement.
+
+   Trois précautions rendent le solde reconstruit fiable : la **date
+   d'opération** l'emporte toujours sur la date de valeur (qui décale les fins
+   de mois) ; les lignes « Solde au… » et « Total des débits » ne sont jamais
+   prises pour des opérations ; et le relevé fait autorité sur le **nombre**
+   d'occurrences d'une même opération — trois cafés identiques le même jour sont
+   trois cafés, et réimporter le relevé n'en ajoute aucun.
+
+   Quand le relevé annonce son propre solde, Essor **propose de le certifier**,
+   avec l'écart qu'il constate : c'est le moyen le plus court de savoir si des
+   opérations manquent.
    Les positions ouvertes sont lues comme un **instantané de quantités** daté du
    rapport — la valorisation en découle, aucune saisie de valeur n'est demandée.
 3. **Budget** → « Installer l'arborescence proposée » crée six catégories de dépenses

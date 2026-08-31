@@ -428,10 +428,82 @@ const ScreenOperations = {
         UI.toast(`Import terminé : <b>${report.added}</b> opération(s) ajoutée(s), ${report.dup} doublon(s) ignoré(s)` +
           (report.trades ? `, ${report.trades} position(s) mise(s) à jour` : '') + '.');
         ScreenOperations.render();
+        if (report.dateParValeur) {
+          UI.toast("Ce relevé ne porte que la <b>date de valeur</b> : les opérations peuvent être " +
+            "décalées d'un jour ou deux. Préférez un export contenant la date d'opération.", 'error');
+        }
+        ScreenOperations.proposerSoldesReleves(report.soldes);
         ScreenOperations.proposeCashCertification();
       });
     };
     return m;
+  },
+
+  // Le relevé porte souvent son propre solde (« Nouveau solde au 31/08/2026 »).
+  // C'est la meilleure certification qui soit : elle vient de la banque, à une
+  // date précise, et elle ferme la question du solde juste. On la propose —
+  // c'est l'utilisateur qui certifie, jamais l'application (P2).
+  proposerSoldesReleves(soldes) {
+    if (!soldes || !soldes.length) return;
+    // Un seul solde par compte : le plus récent que le relevé annonce.
+    const parCompte = new Map();
+    for (const s of soldes) {
+      const p = parCompte.get(s.accountId);
+      if (!p || s.date > p.date) parCompte.set(s.accountId, s);
+    }
+    const propositions = [...parCompte.values()].filter(s => {
+      const a = Engine.account(s.accountId);
+      if (!a) return false;
+      // Inutile si l'on certifie déjà exactement cela.
+      return !Store.state.certifications.some(c =>
+        c.accountId === s.accountId && c.date === s.date && c.balance === s.balance);
+    });
+    if (!propositions.length) return;
+
+    const lignes = propositions.map(s => {
+      const a = Engine.account(s.accountId);
+      const actuel = Engine.cashBalance(s.accountId, s.date);
+      const ecart = actuel == null ? null : s.balance - actuel;
+      return `<tr>
+        <td><input type="checkbox" data-sc="${s.accountId}" checked></td>
+        <td>${U.escapeHtml(a.name)}</td>
+        <td>${U.fmtDate(s.date)}</td>
+        <td class="num">${U.fmtEUR(s.balance)}</td>
+        <td class="num">${actuel == null ? '<span class="muted">non certifié</span>'
+          : ecart === 0 ? '<span class="up">exact</span>'
+          : `<span class="down">${ecart > 0 ? '+' : ''}${U.fmtEUR(ecart)}</span>`}</td>
+      </tr>`;
+    }).join('');
+
+    const m = UI.modal(`
+      <h2>Le relevé annonce son propre solde</h2>
+      <p class="small">Certifier ce solde ancre le compte sur un fait vérifiable : tout le reste —
+      soldes passés, patrimoine, projections — s'en déduit. La colonne « écart » compare ce que dit
+      la banque à ce qu'Essor reconstruit aujourd'hui ; un écart non nul signale des opérations
+      manquantes ou en trop sur la période.</p>
+      <table>
+        <tr><th></th><th>Compte</th><th>Date</th><th class="num">Solde annoncé</th><th class="num">Écart avec Essor</th></tr>
+        ${lignes}
+      </table>
+      <div class="actions">
+        <button class="ghost" data-x="non">Ne pas certifier</button>
+        <button class="primary" data-x="oui">Certifier ces soldes</button>
+      </div>`);
+    m.el.querySelector('[data-x="non"]').onclick = m.close;
+    m.el.querySelector('[data-x="oui"]').onclick = () => {
+      let n = 0;
+      m.el.querySelectorAll('[data-sc]:checked').forEach(cb => {
+        const s = parCompte.get(cb.dataset.sc);
+        if (!s) return;
+        Store.state.certifications.push({ id: U.uid(), accountId: s.accountId, date: s.date, balance: s.balance });
+        n++;
+      });
+      Engine.invalidate();
+      Store.markDirty();
+      m.close();
+      if (n) UI.toast(`${n} solde(s) certifié(s) d'après le relevé. Les soldes passés et actuels en découlent.`);
+      ScreenOperations.render();
+    };
   },
 
   // Après un import, un compte à titres dont les espèces ne sont pas

@@ -424,7 +424,13 @@ const Importer = {
   // ni apostrophes) : « Date de l'opération », « Date de l'operation » et
   // « DATE DE L OPERATION » sont le même intitulé.
   COLS: {
-    date: /^(date|date de l ?operation|date operation|date de valeur|date comptable|date de debut|date de fin|dateop|operation date|booking date|completed date|started date|date d ?execution)$/,
+    // La date d'opération (ou comptable) fait foi. La date de VALEUR, elle,
+    // est une date bancaire d'intérêts : elle décale les opérations d'un ou
+    // deux jours, et fait basculer les fins de mois dans le mois suivant —
+    // de quoi fausser durablement un solde reconstruit à une date donnée.
+    // Elle n'est retenue qu'à défaut d'autre chose (EX-110).
+    date: /^(date|date de l ?operation|date operation|date comptable|date de debut|date de fin|dateop|operation date|booking date|completed date|started date|date d ?execution)$/,
+    dateValeur: /^(date de valeur|value date|date valeur)$/,
     label: /^(libelle|libelle simplifie|libelle operation|description|designation|nom|reference|title|payee|communication|motif|commentaire)$/,
     amount: /^(montant|amount|montant ?\(?eur\)?|valeur|amount ?\(?eur\)?)$/,
     debit: /^debit$/,
@@ -449,18 +455,39 @@ const Importer = {
     let headerIdx = -1, map = null;
     for (let i = 0; i < Math.min(grid.length, 40); i++) {
       const m = Importer.mapHeader(grid[i]);
-      if (m.date != null && (m.amount != null || m.debit != null || m.credit != null)) {
+      const uneDate = m.date != null || m.dateValeur != null;
+      if (uneDate && (m.amount != null || m.debit != null || m.credit != null)) {
         headerIdx = i; map = m; break;
       }
     }
     if (headerIdx < 0) throw new Error("aucune ligne d'en-tête reconnue (colonnes date / montant introuvables).");
+    // Faute de date d'opération, on se rabat sur la date de valeur — en le disant.
+    const dateParValeur = map.date == null && map.dateValeur != null;
+    if (dateParValeur) map.date = map.dateValeur;
     const header = grid[headerIdx].map(h => h.trim());
     const preamble = grid.slice(0, headerIdx).map(r => r.join(' ').trim()).filter(Boolean);
     const rows = [];
+    const soldes = [];
     let hasQty = map.qty != null && map.symbol != null;
     for (let i = headerIdx + 1; i < grid.length; i++) {
       const r = grid[i];
-      const date = U.parseDate(r[map.date]);
+      const ligne = r.join(' ').trim();
+      let date = U.parseDate(r[map.date]);
+      // Un relevé se termine souvent par « Nouveau solde au 31/08/2026 ».
+      // Cette ligne porte une date et un montant : importée comme une
+      // opération, elle fausse le solde de sa propre valeur. Elle est écartée —
+      // et mise de côté, car c'est le solde que la banque certifie elle-même (P2).
+      if (Importer.EST_SOLDE.test(ligne)) {
+        // La date est parfois dans le libellé plutôt que dans sa colonne.
+        if (!date) {
+          const m = ligne.match(/(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/);
+          if (m) date = U.parseDate(m[1]);
+        }
+        const v = map.amount != null ? U.parseAmount(r[map.amount]) : Importer._dernierMontant(r);
+        if (date && v != null) soldes.push({ date, balance: v, source: ligne.slice(0, 80) });
+        continue;
+      }
+      if (Importer.EST_TOTAL.test(ligne)) continue;   // « Total des débits », etc.
       if (!date) continue;
       let amount = null;
       if (map.amount != null) amount = U.parseAmount(r[map.amount]);
@@ -497,7 +524,35 @@ const Importer = {
       }
       rows.push(row);
     }
-    return { kind: hasQty ? 'broker' : 'bank', preamble, header, rows };
+    // Le solde peut aussi figurer AVANT le tableau, dans le préambule.
+    for (const l of preamble) {
+      if (!Importer.EST_SOLDE.test(l)) continue;
+      const d = l.match(/(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/);
+      const v = l.match(/(-?[\d  .]{1,15},\d{2}|-?[\d,]{1,15}\.\d{2})\s*€?\s*$/);
+      if (d && v) {
+        const date = U.parseDate(d[1]), balance = U.parseAmount(v[1]);
+        if (date && balance != null) soldes.push({ date, balance, source: l.slice(0, 80) });
+      }
+    }
+    return { kind: hasQty ? 'broker' : 'bank', preamble, header, rows, soldes, dateParValeur };
+  },
+
+  // « Solde au … », « Nouveau solde », « Solde créditeur » : la banque y dit
+  // elle-même où elle en est. C'est la meilleure certification possible.
+  EST_SOLDE: /(^|[;,	 ])(nouveau\s+solde|ancien\s+solde|solde\s+(au|cr[ée]diteur|d[ée]biteur|initial|final|pr[ée]c[ée]dent|de\s+d[ée]part)|solde\s*:)/i,
+  EST_TOTAL: /(^|[;,	 ])(total\s+des?\s+(d[ée]bits?|cr[ée]dits?|op[ée]rations?)|sous.?total|report\s+[àa]\s+nouveau)/i,
+
+  // Dernière cellule d'une ligne qui se lise comme un montant — utile quand la
+  // ligne de solde n'occupe pas les mêmes colonnes que les opérations.
+  _dernierMontant(cells) {
+    for (let j = cells.length - 1; j >= 0; j--) {
+      const c = String(cells[j] || '').trim();
+      if (!/\d/.test(c)) continue;
+      if (/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(c)) continue;   // c'est une date
+      const v = U.parseAmount(c);
+      if (v != null) return v;
+    }
+    return null;
   },
 
   mapHeader(cells) {
@@ -629,32 +684,41 @@ const Importer = {
     return U.hash(`${accountId}|${row.date}|${row.amount}|${U.normLabel(row.label)}`);
   },
 
-  computeDedup(session) {
-    const existing = new Map(); // hash → nombre déjà présent
+  // Règle unique (EX-27) : pour une même empreinte — compte, date, montant,
+  // libellé — le relevé fait autorité sur le NOMBRE d'occurrences. Si le
+  // fichier en porte trois et que la base en a déjà deux, on en ajoute une.
+  // S'il en porte deux et que la base en a deux, on n'ajoute rien.
+  //
+  // L'ancienne version comptait autrement, et de deux façons différentes selon
+  // l'endroit : trois cafés identiques le même jour n'en laissaient qu'un, et
+  // le ré-import du relevé complet écartait les trois. Le solde reconstruit
+  // s'en trouvait durablement faux, sans que rien ne le signale.
+  _retenir(session, resoudre) {
+    const enBase = new Map();
     for (const t of Store.state.transactions) {
-      existing.set(t.hash, (existing.get(t.hash) || 0) + 1);
+      const k = `${t.accountId}|${t.hash}`;
+      enBase.set(k, (enBase.get(k) || 0) + 1);
     }
-    const inSession = new Map();
+    const vus = new Map();   // occurrences déjà retenues dans CETTE session
     for (const file of session.files) {
       file.newRows = [];
       file.dupCount = 0;
-      const accId = file.accountId || `?${file.path}`;
+      const acc = resoudre(file) || `?${file.path}`;
       for (const row of file.parsed.rows) {
-        const h = Importer.txHash(accId, row);
-        // Deux opérations identiques le même jour existent (deux cafés au même
-        // prix) : on n'écarte que si l'existant en contient déjà autant.
-        const seen = (existing.get(h) || 0) + (inSession.get(h) || 0);
-        const already = Store.state.transactions.filter(t => t.hash === h).length;
-        if (file.accountId && seen >= Math.max(already, 1) && already > 0) {
-          file.dupCount++;
-        } else if (inSession.get(h) >= 1 && !file.accountId) {
-          file.dupCount++;
-        } else {
-          file.newRows.push({ ...row, hash: h });
-        }
-        inSession.set(h, (inSession.get(h) || 0) + 1);
+        const h = Importer.txHash(acc, row);
+        const k = `${acc}|${h}`;
+        const dejaVus = vus.get(k) || 0;
+        if (dejaVus < (enBase.get(k) || 0)) file.dupCount++;   // cette occurrence est déjà en base
+        else file.newRows.push({ ...row, hash: h });
+        vus.set(k, dejaVus + 1);
       }
     }
+  },
+
+  // Prévisualisation : avec les comptes devinés, à défaut un compte fictif
+  // propre au fichier (les chiffres seront revus une fois le compte choisi).
+  computeDedup(session) {
+    Importer._retenir(session, (f) => f.accountId);
   },
 
   /* ---------- Application ---------- */
@@ -664,19 +728,26 @@ const Importer = {
   // propre date (EX-110). Retourne un bilan chiffré.
   apply(session, resolutions = {}) {
     const S = Store.state;
-    const report = { added: 0, dup: 0, trades: 0, byFile: [] };
+    const report = { added: 0, dup: 0, trades: 0, byFile: [], soldes: [] };
     const resolve = (f) => f.accountId || resolutions[f.path] || null;
     const ambiguous = Importer._ambiguousClues(session, resolve);
+    // Le dédoublonnage se rejoue avec les comptes définitifs : tant qu'un
+    // fichier n'était pas rattaché, ses empreintes ne pouvaient pas être
+    // comparées à celles de la base.
+    Importer._retenir(session, resolve);
     for (const file of session.files) {
       const accountId = file.accountId || resolutions[file.path];
       if (!accountId) { report.byFile.push({ path: file.path, skipped: true }); continue; }
       // Recalcul du hachage si le compte vient d'être résolu manuellement.
       let added = 0, trades = 0;
+      // Le solde que le relevé porte lui-même : c'est la meilleure
+      // certification possible, et elle ferme la question du solde juste.
+      for (const sd of (file.parsed.soldes || [])) {
+        report.soldes.push({ accountId, date: sd.date, balance: sd.balance, source: sd.source, fichier: file.path });
+      }
+      if (file.parsed.dateParValeur) report.dateParValeur = true;
       for (const row of file.newRows) {
-        const h = file.accountId ? row.hash : Importer.txHash(accountId, row);
-        const already = S.transactions.filter(t => t.hash === h).length;
-        const inRows = file.newRows.filter(r => Importer.txHash(accountId, r) === h);
-        if (already >= inRows.length && already > 0) { report.dup++; continue; }
+        const h = row.hash;
         const t = {
           id: U.uid(), accountId, date: row.date, amount: row.amount,
           label: row.label, raw: row.raw || null, hash: h,

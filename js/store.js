@@ -51,6 +51,8 @@ const Store = {
       },
       // Dépôt de synchronisation — sans le jeton, qui reste propre à l'appareil.
       sync: { owner: '', repo: '', branch: 'main', chemin: 'essor-data.json.enc' },
+      maj: null,          // heure exacte de la dernière modification synchronisée
+      majPar: null,       // et l'appareil qui l'a faite — pour pouvoir le dire
       accounts: [],       // {id, name, type, order, plafond?, returnOverride?, closed}
       credits: [],        // {id, name, principal, annualRate, monthlyPayment, startDate, months}
       certifications: [], // {id, accountId, date, balance}  (balance en centimes)
@@ -161,6 +163,7 @@ const Store = {
     await Store._reinitialiserAppareil();
     const { cle, sel } = await Coffre.deriver(phrase, null);
     Store._cle = cle; Store._sel = sel; Store._shaDistant = null;
+    Store._sigBase = Store._sigEnvoyee = null;
     Store.state = reprise ? Store.migrate(reprise) : Store.defaultState();
     Store.state.snapshotsDirty = true;
     await Store._ecrireLocal();
@@ -177,6 +180,10 @@ const Store = {
     Store.state = Store.migrate(donnees);
     Store.state.snapshotsDirty = true;
     Store._shaDistant = (await Store._get('sha')) || null;
+    // Le point d'accord d'où repart cette session. Absent (installation
+    // antérieure à cette version), on ne suppose rien : la première divergence
+    // sera arbitrée à la main, une fois.
+    Store._sigEnvoyee = Store._sigBase = (await Store._get('sigEnvoyee')) || null;
     await Store._brancherDepot();
     await Store._majIndices();
   },
@@ -194,9 +201,8 @@ const Store = {
     Store.state = Store.migrate(donnees);
     Store.state.snapshotsDirty = true;
     Store.state.sync = { owner: cfgDepot.owner, repo: cfgDepot.repo, branch: cfgDepot.branch, chemin: cfgDepot.chemin };
-    Store._shaDistant = distant.sha;
     await Store._ecrireLocal();
-    await Store._put('sha', distant.sha);
+    await Store._noterAccord(distant.sha, Store.signature());
     await Store.enregistrerJeton(cfgDepot.jeton);
     await Store._majIndices();
     Store.mode = 'sync';
@@ -230,6 +236,9 @@ const Store = {
     await Store._ecrireLocal();
     if (jeton) await Store.enregistrerJeton(jeton);
     await Store._majIndices();
+    // Le déverrouillage biométrique ouvrait sur l'ancienne phrase : il doit
+    // suivre, ou disparaître — jamais rester faux.
+    if (typeof Bio !== 'undefined') await Bio.resceller(nouvelle);
     // Le dépôt doit recevoir la nouvelle enveloppe tout de suite : sinon les
     // autres appareils continueraient d'y lire l'ancien sel.
     if (Depot.actif()) await Store._pousser({ forcer: true, message: 'Essor — nouvelle phrase de passe' });
@@ -274,6 +283,9 @@ const Store = {
     Depot.configure({ owner, repo, branch: branch || 'main', chemin: chemin || 'essor-data.json.enc', jeton });
     Store.mode = 'sync';
     Store._shaDistant = await Depot.shaCourant();
+    Store._sigBase = Store._sigEnvoyee = null;   // ce dépôt ne nous connaît pas encore
+    await Store._put('sha', Store._shaDistant);
+    await Store._del('sigEnvoyee');
     await Store._majIndices();
     Store.markDirty();
   },
@@ -284,7 +296,9 @@ const Store = {
     Depot.configure(null);
     Store.mode = 'local';
     Store._shaDistant = null;
+    Store._sigBase = Store._sigEnvoyee = null;
     await Store._del('sha');
+    await Store._del('sigEnvoyee');
     await Store._majIndices();
     Store.markDirty();
   },
@@ -305,6 +319,72 @@ const Store = {
     return data;
   },
 
+  /* ---------- Ce qui se synchronise, et ce qui reste ici ---------- */
+
+  // L'écran ouvert et la période choisie appartiennent à l'appareil, pas aux
+  // données : le téléphone et l'ordinateur n'ont aucune raison de regarder le
+  // même mois. Les instantanés, eux, sont un cache recalculable (EX-75).
+  // Les synchroniser faisait d'un simple clic d'onglet une divergence à
+  // arbitrer — c'était la cause du va-et-vient incessant entre deux appareils.
+  LOCAL: ['ui', 'snapshots', 'snapshotsDirty'],
+
+  // Voyagent avec le document mais ne comptent pas dans son empreinte : elles
+  // changent à chaque envoi, alors que l'empreinte doit dire « même contenu ».
+  META: ['maj', 'majPar'],
+
+  // Le document tel qu'il part dans le dépôt, hors horodatage.
+  documentSync(etat) {
+    const src = etat || Store.state;
+    const doc = {};
+    for (const k of Object.keys(src)) {
+      if (!Store.LOCAL.includes(k) && !Store.META.includes(k)) doc[k] = src[k];
+    }
+    return doc;
+  },
+
+  // Empreinte du contenu synchronisable : deux documents de même empreinte
+  // disent la même chose, quelle que soit l'heure ou l'appareil de leur envoi.
+  signature(etat) { return U.hash(JSON.stringify(Store.documentSync(etat))); },
+
+  _sigBase: null,        // empreinte du document au dernier accord avec le dépôt
+  _sigEnvoyee: null,     // empreinte du dernier envoi réussi
+
+  // Le point d'accord avec le dépôt survit à la fermeture : sans lui, la
+  // session suivante ne saurait plus distinguer « j'ai modifié » de
+  // « l'autre appareil a modifié ».
+  async _noterAccord(sha, sig) {
+    Store._shaDistant = sha;
+    Store._sigBase = Store._sigEnvoyee = sig;
+    await Store._put('sha', sha);
+    await Store._put('sigEnvoyee', sig);
+  },
+
+  /* ---------- Identité de l'appareil ---------- */
+
+  _appareil: null,
+
+  async idAppareil() {
+    if (Store._appareil) return Store._appareil;
+    let a = await Store._get('appareil');
+    if (!a) {
+      a = { id: U.uid(), nom: Store._nomAppareil() };
+      await Store._put('appareil', a);
+    }
+    Store._appareil = a;
+    return a;
+  },
+
+  _nomAppareil() {
+    const ua = navigator.userAgent;
+    if (/iPhone/i.test(ua)) return 'iPhone';
+    if (/iPad/i.test(ua)) return 'iPad';
+    if (/Android/i.test(ua)) return 'Android';
+    if (/Windows/i.test(ua)) return 'Windows';
+    if (/Mac OS X/i.test(ua)) return 'Mac';
+    if (/Linux/i.test(ua)) return 'Linux';
+    return 'cet appareil';
+  },
+
   /* ---------- Enregistrement ---------- */
 
   markDirty() {
@@ -322,11 +402,13 @@ const Store = {
   },
 
   async _doSave() {
-    if (Store.conflit) return;            // tant que le conflit n'est pas tranché
     Store.saveStatus = 'saving';
     Store._notify();
+    // L'appareil d'abord, TOUJOURS — y compris pendant un conflit. Le conflit
+    // ne porte que sur le dépôt ; refuser d'écrire en local laisserait le
+    // travail en cours dans la seule mémoire vive, qu'un rechargement efface.
     try {
-      await Store._ecrireLocal();         // l'appareil d'abord : rien ne se perd hors ligne
+      await Store._ecrireLocal();
     } catch (e) {
       console.error('Échec de l\'enregistrement local', e);
       Store.saveStatus = 'error';
@@ -334,6 +416,14 @@ const Store = {
       return;
     }
     if (!Depot.actif()) { Store.saveStatus = 'saved'; Store._notify(); return; }
+    if (Store.conflit) {
+      // Le dépôt attend un arbitrage. On ne pousse pas — mais on le dit, et on
+      // remet la question à l'écran plutôt que de rester figé sans rien faire.
+      Store.saveStatus = 'conflit';
+      Store._notify();
+      if (Store.onConflict) Store.onConflict();
+      return;
+    }
     await Store._pousser();
   },
 
@@ -346,20 +436,39 @@ const Store = {
   _derniereEnveloppe: null,
   _raisonAttente: null,
 
-  async _pousser({ forcer = false, message } = {}) {
+  async _pousser({ forcer = false, message, reessai = false } = {}) {
     try {
-      const env = Store._derniereEnveloppe || await Coffre.sceller(Store._cle, Store._sel, Store.state);
+      const sig = Store.signature();
+      // Rien de neuf à dire au dépôt : on ne l'encombre pas d'une révision
+      // identique, qui ne ferait qu'invalider le repère de l'autre appareil.
+      if (!forcer && sig === Store._sigEnvoyee && Store._shaDistant) {
+        Store._enAttente = false;
+        Store.saveStatus = 'saved';
+        Store._notify();
+        return;
+      }
+      const appareil = await Store.idAppareil();
+      const doc = Store.documentSync();
+      doc.maj = new Date().toISOString();          // l'heure exacte de CETTE modification
+      doc.majPar = { id: appareil.id, nom: appareil.nom };
+      const env = await Coffre.sceller(Store._cle, Store._sel, doc);
       const sha = forcer ? await Depot.shaCourant() : Store._shaDistant;
-      const r = await Depot.ecrire(env, sha, message || `Essor — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`);
-      Store._shaDistant = r.sha;
-      await Store._put('sha', r.sha);
+      const r = await Depot.ecrire(env, sha,
+        message || `Essor — ${appareil.nom} — ${doc.maj.slice(0, 16).replace('T', ' ')}`);
+      // Un dépôt qui n'annonce pas la nouvelle version nous laisserait sans
+      // repère, et le prochain envoi passerait pour un conflit : on va la
+      // chercher plutôt que de retenir « rien ».
+      await Store._noterAccord(r.sha || await Depot.shaCourant(), sig);
+      Store.state.maj = doc.maj;
+      Store.state.majPar = doc.majPar;
       Store._enAttente = false;
       Store.conflit = false;
       Store.saveStatus = 'saved';
     } catch (e) {
+      if (e.code === 'CONFLIT' && !reessai) return Store._arbitrer(message);
       if (e.code === 'CONFLIT') {
         Store.conflit = true;
-        Store.saveStatus = 'error';
+        Store.saveStatus = 'conflit';
         Store._notify();
         if (Store.onConflict) Store.onConflict();
         return;
@@ -375,6 +484,93 @@ const Store = {
     Store._notify();
   },
 
+  /* ---------- Arbitrage ---------- */
+
+  // Le dépôt a refusé l'envoi : sa version n'est plus celle qu'on croyait.
+  // Trois situations très différentes se cachent derrière ce même refus, et
+  // une seule mérite qu'on dérange l'utilisateur.
+  async _arbitrer(message) {
+    let distant;
+    try { distant = await Depot.lire(); }
+    catch {
+      Store._enAttente = true;
+      Store.saveStatus = 'local';
+      Store._raisonAttente = 'Pas de connexion au dépôt.';
+      Store._notify();
+      return;
+    }
+    if (!distant) return Store._pousser({ forcer: true, message, reessai: true });
+
+    const docDistant = await Coffre.ouvrirAvecCle(Store._cle, distant.texte);
+    const sigDistant = Store.signature(docDistant);
+    const sigLocal = Store.signature();
+
+    // 1. Le dépôt dit exactement ce que nous disons — ou exactement ce sur quoi
+    //    nous nous appuyions. Rien n'a divergé : seul le numéro de version
+    //    manquait. On le reprend, sans un mot.
+    if (sigDistant === sigLocal) {
+      await Store._accorder(distant, docDistant);
+      return;
+    }
+    if (Store._sigBase && sigDistant === Store._sigBase) {
+      Store._shaDistant = distant.sha;
+      await Store._put('sha', distant.sha);
+      return Store._pousser({ message, reessai: true });
+    }
+
+    // 2. Nous n'avons rien changé depuis notre dernier accord : l'autre
+    //    appareil est simplement en avance. On le suit — c'est une mise à
+    //    jour, pas un conflit.
+    if (Store._sigBase && sigLocal === Store._sigBase) {
+      await Store._adopter(distant, docDistant);
+      if (Store.onFastForward) Store.onFastForward(docDistant);
+      return;
+    }
+
+    // 3. Les deux côtés ont réellement changé depuis leur dernier point commun.
+    //    Là, et seulement là, la question se pose.
+    Store.conflit = true;
+    Store.conflitInfo = {
+      distant: { maj: docDistant.maj || null, par: docDistant.majPar || null, doc: docDistant, sha: distant.sha },
+      local: { maj: Store.state.maj || null, par: Store.state.majPar || null },
+      resume: Store.comparer(docDistant),
+    };
+    Store.saveStatus = 'conflit';
+    Store._notify();
+    if (Store.onConflict) Store.onConflict();
+  },
+
+  conflitInfo: null,
+  onFastForward: null,
+
+  // Le dépôt et nous disons la même chose : on s'aligne sur son numéro.
+  async _accorder(distant, docDistant) {
+    Store.state.maj = docDistant.maj || Store.state.maj;
+    Store.state.majPar = docDistant.majPar || Store.state.majPar;
+    await Store._noterAccord(distant.sha, Store.signature());
+    Store.conflit = false;
+    Store._enAttente = false;
+    Store.saveStatus = 'saved';
+    Store._notify();
+  },
+
+  // Adopte le document du dépôt, en gardant ce qui appartient à cet appareil
+  // (l'écran ouvert, la période, le cache d'instantanés).
+  async _adopter(distant, docDistant) {
+    const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
+    Store.state = Store.migrate(docDistant);
+    Store.state.ui = local.ui;
+    Store.state.snapshots = local.snapshots || {};
+    Store.state.snapshotsDirty = true;
+    await Store._ecrireLocal();
+    await Store._noterAccord(distant.sha, Store.signature());
+    Store.conflit = false;
+    Store.conflitInfo = null;
+    Store._enAttente = false;
+    Store.saveStatus = 'saved';
+    Store._notify();
+  },
+
   // Rattrape une synchronisation en attente (retour du réseau, bouton manuel).
   async synchroniser() {
     if (!Depot.actif() || !Store.state) return;
@@ -383,32 +579,146 @@ const Store = {
 
   /* ---------- Relecture du dépôt (arrivée d'un autre appareil) ---------- */
 
-  // Le dépôt a-t-il bougé depuis la dernière écriture de cette session ?
-  // → 'a-jour' | 'repris' (état distant adopté) | 'conflit' | 'indisponible'
+  // Interrogation légère : un seul appel, qui ne rapporte que le numéro de
+  // version. C'est elle qu'on répète en tâche de fond — jamais le contenu.
+  async aDuNeuf() {
+    if (!Depot.actif() || !Store.state) return false;
+    try {
+      const sha = await Depot.shaCourant();
+      return !!sha && sha !== Store._shaDistant;
+    } catch { return false; }
+  },
+
+  // → 'a-jour' | 'repris' | 'conflit' | 'indisponible'
   async rafraichir() {
     if (!Depot.actif() || !Store.state) return 'indisponible';
-    // Ce qui attend d'être écrit part d'abord : c'est le dépôt qui arbitre, par
-    // le sha. Sans cela, une modification non encore poussée passerait pour un
-    // conflit alors qu'elle n'a même pas été proposée.
-    if (Store.saveStatus === 'dirty' || Store._enAttente) {
-      await Store.save();
-      if (Store.conflit) return 'conflit';
-      if (Store._enAttente) return 'indisponible';   // toujours sans réseau
-    }
+    if (Store.conflit) return 'conflit';
     let distant;
     try { distant = await Depot.lire(); }
     catch { return 'indisponible'; }
-    if (!distant) return 'a-jour';
-    if (distant.sha === Store._shaDistant) return 'a-jour';
-    const donnees = await Coffre.ouvrirAvecCle(Store._cle, distant.texte);
-    Store.state = Store.migrate(donnees);
+    if (!distant) {
+      // Le dépôt est vide : c'est à nous de l'amorcer.
+      if (Store.signature() !== Store._sigEnvoyee) await Store.save();
+      return 'a-jour';
+    }
+    const aEcrire = Store.signature() !== Store._sigEnvoyee || Store._enAttente;
+    if (distant.sha === Store._shaDistant) {
+      if (aEcrire) await Store.save();
+      return 'a-jour';
+    }
+    const docDistant = await Coffre.ouvrirAvecCle(Store._cle, distant.texte);
+    const sigDistant = Store.signature(docDistant);
+    if (sigDistant === Store.signature()) { await Store._accorder(distant, docDistant); return 'a-jour'; }
+    // Rien de local en attente : on suit le dépôt, sans rien demander.
+    if (!aEcrire || sigDistant === Store._sigBase || Store.signature() === Store._sigBase) {
+      if (sigDistant === Store._sigBase) { await Store.save(); return 'a-jour'; }
+      await Store._adopter(distant, docDistant);
+      return 'repris';
+    }
+    // Divergence réelle : l'envoi la fera trancher, avec le même arbitrage.
+    await Store.save();
+    return Store.conflit ? 'conflit' : 'a-jour';
+  },
+
+  /* ---------- Résolution d'une divergence réelle ---------- */
+
+  // Ce qui sépare les deux versions, en clair et en chiffres : sans cela,
+  // « garder ma session » ou « reprendre l'autre » se choisit à l'aveugle.
+  comparer(docDistant) {
+    const COLLECTIONS = ['transactions', 'accounts', 'certifications', 'trades',
+      'positionSnapshots', 'goals', 'credits', 'rules'];
+    const out = { collections: [], reglages: false };
+    for (const k of COLLECTIONS) {
+      const ici = new Set((Store.state[k] || []).map(x => x.id));
+      const la = new Set((docDistant[k] || []).map(x => x.id));
+      const seulIci = [...ici].filter(id => !la.has(id)).length;
+      const seulLa = [...la].filter(id => !ici.has(id)).length;
+      if (seulIci || seulLa) out.collections.push({ nom: k, ici: seulIci, la: seulLa });
+    }
+    out.reglages = JSON.stringify(Store.state.settings) !== JSON.stringify(docDistant.settings) ||
+      JSON.stringify(Store.state.budget) !== JSON.stringify(docDistant.budget) ||
+      JSON.stringify(Store.state.targets) !== JSON.stringify(docDistant.targets);
+    return out;
+  },
+
+  // Réunit les deux versions : tout ce qui existe d'un côté ou de l'autre est
+  // gardé, et ce qui a été modifié des deux côtés revient à la version la plus
+  // récente. C'est le bon geste quand les appareils ont travaillé sur des
+  // choses différentes — importer ici, catégoriser là.
+  async fusionner() {
+    if (!Store.conflitInfo) throw new Error('Aucune divergence à fusionner.');
+    const distant = Store.conflitInfo.distant;
+    const docDistant = distant.doc;
+    await Store._sauvegardeLocale('avant-fusion');
+
+    const distantPlusRecent = (distant.maj || '') > (Store.state.maj || '');
+    const [vieux, neuf] = distantPlusRecent ? [Store.state, docDistant] : [docDistant, Store.state];
+
+    // Les collections identifiées se réunissent par identifiant.
+    const COLLECTIONS = ['transactions', 'accounts', 'certifications', 'trades',
+      'positionSnapshots', 'goals', 'credits', 'rules', 'ambiguousMerchants'];
+    const fusion = Object.assign({}, vieux, neuf);   // le reste : au plus récent
+    for (const k of COLLECTIONS) {
+      const a = vieux[k] || [], b = neuf[k] || [];
+      if (!Array.isArray(a) || !Array.isArray(b)) continue;
+      if (!a.length || !a[0] || a[0].id === undefined) { fusion[k] = b.length ? b : a; continue; }
+      const parId = new Map();
+      for (const x of a) parId.set(x.id, x);
+      for (const x of b) parId.set(x.id, x);       // le plus récent l'emporte
+      fusion[k] = [...parId.values()];
+    }
+    // Dictionnaires (cours, métadonnées) : réunion clé à clé.
+    for (const k of ['prices', 'priceMeta', 'geo', 'geoSource', 'geoIndice', 'pru', 'importMemory']) {
+      fusion[k] = Object.assign({}, vieux[k] || {}, neuf[k] || {});
+    }
+    if (fusion.prices) {
+      for (const sym of Object.keys(fusion.prices)) {
+        fusion.prices[sym] = Object.assign({}, (vieux.prices || {})[sym] || {}, (neuf.prices || {})[sym] || {});
+      }
+    }
+    // Réunir deux imports du même relevé recréerait les doublons que
+    // l'application s'interdit (EX-27) : on rétablit la règle — pour une même
+    // empreinte, le nombre d'occurrences du côté qui en comptait le plus.
+    fusion.transactions = Store._dedoublonner(vieux.transactions || [], neuf.transactions || []);
+
+    const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
+    Store.state = Store.migrate(fusion);
+    Store.state.ui = local.ui;
+    Store.state.snapshots = local.snapshots || {};
     Store.state.snapshotsDirty = true;
     Store._shaDistant = distant.sha;
-    await Store._ecrireLocal();
     await Store._put('sha', distant.sha);
-    Store.saveStatus = 'saved';
-    Store._notify();
-    return 'repris';
+    Store.conflit = false;
+    Store.conflitInfo = null;
+    Store._sigBase = null;                 // la fusion est neuve des deux côtés
+    await Store._ecrireLocal();
+    await Store._pousser({ forcer: true, message: 'Essor — fusion des deux appareils' });
+  },
+
+  // Reprend la règle de dédoublonnage de l'import (EX-27) : deux relevés
+  // identiques importés de part et d'autre ne doivent pas doubler les lignes,
+  // mais deux cafés réellement payés le même jour doivent rester deux.
+  _dedoublonner(a, b) {
+    const cle = (t) => `${t.accountId}|${t.hash || U.hash(`${t.date}|${t.amount}|${U.normLabel(t.label || '')}`)}`;
+    const compte = (liste) => {
+      const m = new Map();
+      for (const t of liste) m.set(cle(t), (m.get(cle(t)) || 0) + 1);
+      return m;
+    };
+    const ca = compte(a), cb = compte(b);
+    const plafond = new Map();
+    for (const k of new Set([...ca.keys(), ...cb.keys()])) plafond.set(k, Math.max(ca.get(k) || 0, cb.get(k) || 0));
+    const vus = new Map(), out = [], ids = new Set();
+    for (const t of [...b, ...a]) {           // le côté récent d'abord
+      if (ids.has(t.id)) continue;
+      const k = cle(t);
+      const n = vus.get(k) || 0;
+      if (n >= (plafond.get(k) || 0)) continue;
+      vus.set(k, n + 1);
+      ids.add(t.id);
+      out.push(t);
+    }
+    return out;
   },
 
   // Écrase la version du dépôt, après l'avoir mise à l'abri dans backups/.
@@ -418,7 +728,9 @@ const Store = {
       if (distant) await Depot.deposerSauvegarde(`essor-conflit-${Store._horodatage()}-version-ecartee.json.enc`, distant.texte);
     } catch { /* rien à sauvegarder */ }
     Store.conflit = false;
-    await Store._pousser({ forcer: true, message: 'Essor — version de cet appareil imposée' });
+    Store.conflitInfo = null;
+    Store._sigBase = null;
+    await Store._pousser({ forcer: true, message: 'Essor — version de cet appareil imposée', reessai: true });
   },
 
   // Reprend la version de l'autre appareil, en abandonnant la sienne.
@@ -427,18 +739,13 @@ const Store = {
       await Store._sauvegardeLocale('conflit-version-locale-ecartee');
       const distant = await Depot.lire();
       if (!distant) throw new Error('Le dépôt ne contient aucun fichier.');
-      const donnees = await Coffre.ouvrirAvecCle(Store._cle, distant.texte);
-      Store.state = Store.migrate(donnees);
-      Store.state.snapshotsDirty = true;
-      Store._shaDistant = distant.sha;
-      await Store._ecrireLocal();
-      await Store._put('sha', distant.sha);
-      Store.conflit = false;
-      Store.saveStatus = 'saved';
+      const docDistant = await Coffre.ouvrirAvecCle(Store._cle, distant.texte);
+      await Store._adopter(distant, docDistant);
     } catch (e) {
-      Store.saveStatus = 'error';
+      Store.saveStatus = 'conflit';   // le conflit tient toujours : le dire
+      Store._notify();
       throw e;
-    } finally { Store._notify(); }
+    }
   },
 
   /* ---------- Sauvegardes (EX-95, EX-96) ---------- */
@@ -544,7 +851,7 @@ const Store = {
   // Tout ce qui est scellé avec l'ancienne clé — coffre, jeton, sauvegardes —
   // deviendrait illisible sous une nouvelle : on ne le garde pas.
   async _reinitialiserAppareil() {
-    for (const k of ['coffre', 'jeton', 'sha', 'backups', 'indices']) await Store._del(k);
+    for (const k of ['coffre', 'jeton', 'sha', 'sigEnvoyee', 'backups', 'indices', 'bio']) await Store._del(k);
     Store._jeton = null; Store._derniereEnveloppe = null;
     Store._enAttente = false; Store.conflit = false;
   },

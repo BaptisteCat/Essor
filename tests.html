@@ -590,6 +590,81 @@ try {
     bac.remove();
   }
 
+  /* ---- Relevés bancaires : ce qui faussait le solde reconstruit ---- */
+  {
+    // 1. Deux colonnes de date. La date de VALEUR est une date d'intérêts :
+    //    elle décale les opérations et fait basculer les fins de mois.
+    const deuxDates = Importer.parseCsv(
+`Date de valeur;Date comptable;Libelle;Montant
+02/08/2026;31/07/2026;LOYER;-850,00
+`);
+    check("Relevé — entre date de valeur et date d'opération, c'est l'opération qui fait foi",
+      deuxDates.rows[0].date === '2026-07-31', deuxDates.rows[0].date);
+
+    const valeurSeule = Importer.parseCsv(
+`Date de valeur;Libelle;Montant
+02/08/2026;LOYER;-850,00
+`);
+    check("Relevé — à défaut, la date de valeur sert, et le repli est signalé",
+      valeurSeule.rows[0].date === '2026-08-02' && valeurSeule.dateParValeur === true);
+
+    // 2. La ligne « Solde au … » porte une date et un montant : importée comme
+    //    opération, elle faussait le solde de sa propre valeur.
+    const avecPied = Importer.parseCsv(
+`Solde au 31/07/2026 : 1 234,56
+Date comptable;Libelle;Montant
+01/08/2026;CARREFOUR;-42,50
+02/08/2026;SALAIRE;2350,00
+Total des debits;;-42,50
+Nouveau solde au 31/08/2026;;3542,06
+`);
+    check("Relevé — les lignes de solde et de total ne sont jamais prises pour des opérations",
+      avecPied.rows.length === 2 && avecPied.rows.map(r => r.label).join('|') === 'CARREFOUR|SALAIRE',
+      avecPied.rows.map(r => r.label).join('|'));
+    check("Relevé — le solde annoncé par la banque est recueilli, en tête comme en pied",
+      avecPied.soldes.length === 2 &&
+      avecPied.soldes.some(s => s.date === '2026-07-31' && s.balance === 123456) &&
+      avecPied.soldes.some(s => s.date === '2026-08-31' && s.balance === 354206),
+      JSON.stringify(avecPied.soldes.map(s => [s.date, s.balance])));
+
+    // 3. Le dédoublonnage : le relevé fait autorité sur le NOMBRE d'occurrences.
+    //    Trois cafés identiques le même jour sont trois cafés.
+    const S = fresh();
+    S.accounts.push({ id: 'cc', name: 'Compte courant', type: 'courant', order: 0 });
+    const releve = (n) => 'Date;Libelle;Montant' +
+      Array.from({ length: n }, () => String.fromCharCode(10) + '05/08/2026;CAFE DU COIN;-3,50').join('') +
+      String.fromCharCode(10);
+    const importer = async (n) => {
+      const ses = await Importer.analyze([{ name: 'releve.csv', bytes: new TextEncoder().encode(releve(n)) }]);
+      return Importer.apply(ses, { [ses.files[0].path]: 'cc' });
+    };
+    const r1 = await importer(2);
+    check('EX-27 — trois opérations réellement identiques ne se réduisent pas à une seule',
+      r1.added === 2 && S.transactions.length === 2, `ajoutées ${r1.added}`);
+    const r2 = await importer(3);
+    check('EX-27 — le relevé complet complète ce qui manque, sans redoubler ce qui est là',
+      r2.added === 1 && r2.dup === 2 && S.transactions.length === 3,
+      `ajoutées ${r2.added}, doublons ${r2.dup}`);
+    const r3 = await importer(3);
+    check("EX-27 — réimporter le même relevé n'ajoute toujours rien",
+      r3.added === 0 && r3.dup === 3 && S.transactions.length === 3);
+    check('Solde — le solde reconstruit vaut exactement la somme des opérations du relevé',
+      S.transactions.reduce((s, t) => s + t.amount, 0) === -1050,
+      String(S.transactions.reduce((s, t) => s + t.amount, 0)));
+
+    // Le solde du relevé remonte jusqu'au rapport d'import, prêt à certifier.
+    const ses = await Importer.analyze([{ name: 'aout.csv', bytes: new TextEncoder().encode(
+`Date comptable;Libelle;Montant
+06/08/2026;PEAGE;-12,30
+Nouveau solde au 31/08/2026;;1000,00
+`) }]);
+    const rep = Importer.apply(ses, { [ses.files[0].path]: 'cc' });
+    check("Solde — celui que la banque annonce remonte jusqu'au rapport, prêt à être certifié",
+      rep.soldes.length === 1 && rep.soldes[0].accountId === 'cc' &&
+      rep.soldes[0].date === '2026-08-31' && rep.soldes[0].balance === 100000,
+      JSON.stringify(rep.soldes));
+  }
+
   /* ---- QIF : un format sans en-tête, où la date est piégeuse ---- */
   {
     const q = (t) => Importer.parseQif(t);

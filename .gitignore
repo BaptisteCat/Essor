@@ -1,0 +1,9 @@
+# Outillage local de développement — n'a rien à faire sur le site publié.
+.claude/
+
+# Données : elles ne doivent JAMAIS atterrir dans le dépôt public.
+essor-data.json
+*.json.enc
+donnees/
+backups/
+_test-releve.zip

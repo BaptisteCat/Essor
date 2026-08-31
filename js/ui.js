@@ -39,6 +39,24 @@ const UI = {
     UI.toast(`<b>${U.escapeHtml(cause)}</b><br>${U.escapeHtml(action || '')}`, 'error');
   },
 
+  /* ---------- Champ secret ---------- */
+
+  // Une phrase de passe longue se tape mal à l'aveugle, surtout au pouce sur un
+  // téléphone. On la montre à la demande : c'est le geste que fait tout le
+  // monde, et le masquage par défaut suffit contre le regard par-dessus l'épaule.
+  secret(id, { placeholder = '', autocomplete = 'current-password', requis = false } = {}) {
+    return `<div class="champ-secret">
+      <input type="password" id="${id}" placeholder="${U.escapeHtml(placeholder)}"
+        autocomplete="${autocomplete}" autocapitalize="off" autocorrect="off"
+        spellcheck="false" ${requis ? 'required' : ''}>
+      <button type="button" class="oeil" data-oeil="${id}"
+        aria-label="Afficher la phrase" title="Afficher la phrase">${UI.OEIL}</button>
+    </div>`;
+  },
+
+  OEIL: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.6 12S5.3 5.5 12 5.5 22.4 12 22.4 12 18.7 18.5 12 18.5 1.6 12 1.6 12Z"/><circle cx="12" cy="12" r="3.1"/></svg>',
+  OEIL_BARRE: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.6 12S5.3 5.5 12 5.5c1.6 0 3 .37 4.2.94M22.4 12s-3.7 6.5-10.4 6.5c-1.7 0-3.1-.4-4.3-1"/><path d="M9.9 9.9a3.1 3.1 0 004.3 4.3"/><path d="M3 3l18 18"/></svg>',
+
   /* ---------- Modales ---------- */
 
   modal(html, { onClose } = {}) {
@@ -121,11 +139,16 @@ const UI = {
       dirty: 'Modifications en attente…',
       // Le distinguo compte : les données SONT à l'abri, seul le dépôt attend.
       local: 'Enregistré ici — synchronisation en attente',
+      conflit: 'Enregistré ici — le dépôt attend votre arbitrage',
       error: 'ÉCHEC d\'enregistrement',
     };
-    el.className = status === 'local' ? 'dirty' : status;
+    el.className = status === 'local' ? 'dirty' : status === 'conflit' ? 'error' : status;
     el.title = status === 'local' ? (Store._raisonAttente || '')
+      : status === 'conflit' ? 'Cliquez pour trancher : reprendre la version du dépôt, ou imposer la vôtre.'
       : mode === 'local' ? 'Aucune synchronisation configurée (Réglages → Synchronisation).' : '';
+    // Un état bloquant doit toujours offrir sa sortie, à portée de clic.
+    el.style.cursor = status === 'conflit' ? 'pointer' : '';
+    el.onclick = status === 'conflit' ? () => App.conflitModal() : null;
     el.innerHTML = `<span class="dot"></span>${labels[status] || status}`;
   },
 
@@ -319,3 +342,22 @@ const UI = {
     return `<span class="${cls} num">${U.fmtEUR(cents, { forceSign: true })}${pct != null ? ` (${U.fmtPct(pct)})` : ''}</span>`;
   },
 };
+
+// Bascule « afficher / masquer » de tout champ secret, où qu'il soit rendu —
+// écrans d'accueil, modales, Réglages. Un seul écouteur, posé une fois.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest ? e.target.closest('[data-oeil]') : null;
+  if (!b) return;
+  const champ = document.getElementById(b.dataset.oeil);
+  if (!champ) return;
+  const montre = champ.type === 'password';
+  champ.type = montre ? 'text' : 'password';
+  b.innerHTML = montre ? UI.OEIL_BARRE : UI.OEIL;
+  b.setAttribute('aria-label', montre ? 'Masquer la phrase' : 'Afficher la phrase');
+  b.title = b.getAttribute('aria-label');
+  b.classList.toggle('actif', montre);
+  // Rendre la main au champ, curseur en fin de saisie.
+  champ.focus();
+  const n = champ.value.length;
+  try { champ.setSelectionRange(n, n); } catch { /* type=text seulement */ }
+});

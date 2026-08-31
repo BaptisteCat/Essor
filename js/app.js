@@ -48,6 +48,7 @@ const App = {
   /* ---------- Écran de déverrouillage ---------- */
 
   async ecranDeverrouillage(message) {
+    clearInterval(App._sondage);          // plus rien ne parle au dépôt une fois verrouillé
     document.getElementById('app').style.display = 'none';
     const b = document.getElementById('boot');
     b.style.display = 'flex';
@@ -58,16 +59,18 @@ const App = {
       ${message ? `<p class="notice">${U.escapeHtml(message)}</p>` : ''}
       <p>Vos données sont chiffrées sur cet appareil. Saisissez la phrase de passe
       pour les ouvrir.</p>
+      <div id="zone-bio"></div>
       <form id="frm-open" autocomplete="on">
         <input type="text" name="username" value="essor" autocomplete="username" hidden>
-        <input type="password" id="ph" placeholder="Phrase de passe" autocomplete="current-password"
-               autocapitalize="off" autocorrect="off" spellcheck="false" required>
+        ${UI.secret('ph', { placeholder: 'Phrase de passe', autocomplete: 'current-password', requis: true })}
         <div class="erreur" id="err-open"></div>
         <button class="primary" type="submit">Ouvrir</button>
       </form>
       ${depot ? `<p class="hint">Dépôt de synchronisation : <b>${U.escapeHtml(depot)}</b></p>` : ''}
       <p class="hint"><button class="lien" id="autre-appareil">Utiliser un autre coffre sur cet appareil…</button></p>
+      ${App.encartInstallation()}
     </div>`;
+    App.brancherInstallation(() => App.ecranDeverrouillage(message));
     const err = document.getElementById('err-open');
     document.getElementById('frm-open').onsubmit = async (e) => {
       e.preventDefault();
@@ -86,7 +89,64 @@ const App = {
       });
     };
     document.getElementById('autre-appareil').onclick = () => App.ecranPremierUsage(true);
+    App.offrirBiometrie(err);
     setTimeout(() => { const i = document.getElementById('ph'); if (i) i.focus(); }, 60);
+  },
+
+  // Déverrouillage sans saisie, quand l'appareil sait vérifier son porteur.
+  // La phrase reste affichée dessous : la biométrie peut échouer, et un
+  // déverrouillage sans porte de sortie serait une impasse.
+  async offrirBiometrie(err) {
+    const zone = document.getElementById('zone-bio');
+    if (!zone || !(await Bio.configuree()) || !(await Bio.disponible())) return;
+    zone.innerHTML = `<button class="primary bouton-bio" id="btn-bio">
+      <span class="ico-bio">☉</span> Déverrouiller avec ${U.escapeHtml(Bio.nomLocal())}</button>
+      <div class="separateur"><span>ou la phrase de passe</span></div>`;
+    const ouvrir = async (bouton) => UI.busy(bouton, async () => {
+      if (err) err.textContent = '';
+      let phrase;
+      try { phrase = await Bio.ouvrir(); }
+      catch (ex) { if (err) err.textContent = ex.message; return; }
+      try { await Store.deverrouiller(phrase); }
+      catch (ex) {
+        if (err) err.textContent = ex.message === 'PHRASE_INVALIDE'
+          ? 'La phrase enregistrée pour cet appareil n\'ouvre plus le coffre. Saisissez-la à la main.'
+          : ex.message;
+        return;
+      }
+      App.demarrer();
+      App.rattraperDepot();
+    });
+    document.getElementById('btn-bio').onclick = (e) => ouvrir(e.currentTarget);
+  },
+
+  /* ---------- Installation sur l'appareil ---------- */
+
+  // Encart discret des écrans d'accueil : c'est là qu'un nouvel appareil
+  // arrive, donc le bon moment pour proposer l'installation. Rien ne s'affiche
+  // si l'application tourne déjà depuis l'écran d'accueil.
+  encartInstallation() {
+    if (Install.installee() || !Install.servieCorrectement()) return '';
+    if (Install.invitable()) {
+      return `<div class="encart-install">
+        <b>Installer Essor sur cet appareil</b>
+        <p class="small">Elle s'ouvre alors en plein écran, depuis l'écran d'accueil, et fonctionne hors réseau.</p>
+        <button class="primary" id="inst-btn">Installer l'application</button></div>`;
+    }
+    if (Install.plateforme() === 'bureau') return '';   // inutile d'insister sur un ordinateur
+    return `<div class="encart-install">
+      <b>Installer Essor sur cet appareil</b>
+      ${Install.instructions()}</div>`;
+  },
+
+  brancherInstallation(rafraichir) {
+    const b = document.getElementById('inst-btn');
+    if (!b) return;
+    b.onclick = () => UI.busy(b, async () => {
+      const r = await Install.proposer();
+      if (r === 'accepte' && UI.toast) UI.toast('Essor est installée : retrouvez-la sur votre écran d\'accueil.');
+      if (rafraichir) rafraichir();
+    });
   },
 
   /* ---------- Premier usage : créer, rejoindre, reprendre ---------- */
@@ -108,7 +168,9 @@ const App = {
           <span>Importer un <code>essor-data.json</code> (version locale) ou une sauvegarde chiffrée.</span></button>
       </div>
       <div id="boot-form"></div>
+      ${App.encartInstallation()}
     </div>`;
+    App.brancherInstallation(() => App.ecranPremierUsage(coffreExistant));
     b.querySelectorAll('[data-c]').forEach(x => x.onclick = () => {
       b.querySelectorAll('[data-c]').forEach(y => y.classList.toggle('actif', y === x));
       App[{ creer: 'formCreer', rejoindre: 'formRejoindre', fichier: 'formFichier' }[x.dataset.c]]();
@@ -125,9 +187,8 @@ const App = {
       <label>Branche<input id="d-branch" placeholder="main" value="${U.escapeHtml(pre.branch || 'main')}"></label>
       <label>Fichier<input id="d-chemin" placeholder="essor-data.json.enc" value="${U.escapeHtml(pre.chemin || 'essor-data.json.enc')}"></label>
     </div>
-    <label>Jeton d'accès personnel (fine-grained, droit « Contents : read and write » sur ce dépôt)
-      <input type="password" id="d-jeton" placeholder="github_pat_…" autocomplete="off"
-        autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <label>Jeton d'accès personnel (fine-grained, droit « Contents : read and write » sur ce dépôt)</label>
+    ${UI.secret('d-jeton', { placeholder: 'github_pat_…', autocomplete: 'off' })}
     <div class="hint">Le jeton reste sur cet appareil, chiffré avec votre phrase de passe.
     Il n'est jamais écrit dans le dépôt ni transmis ailleurs qu'à api.github.com.</div>`;
   },
@@ -149,11 +210,9 @@ const App = {
       ici comme dans le dépôt : notez-la dans votre gestionnaire de mots de passe avant de continuer.</p>
       <form id="frm-creer">
         <input type="text" name="username" value="essor" autocomplete="username" hidden>
-        <input type="password" id="p1" placeholder="Phrase de passe" autocomplete="new-password"
-               autocapitalize="off" autocorrect="off" spellcheck="false" required>
+        ${UI.secret('p1', { placeholder: 'Phrase de passe', autocomplete: 'new-password', requis: true })}
         <div id="jauge" class="jauge"></div>
-        <input type="password" id="p2" placeholder="Répéter la phrase" autocomplete="new-password"
-               autocapitalize="off" autocorrect="off" spellcheck="false" required>
+        ${UI.secret('p2', { placeholder: 'Répéter la phrase', autocomplete: 'new-password', requis: true })}
         <div class="erreur" id="err-creer"></div>
         <button class="primary" type="submit">Créer le coffre</button>
       </form>`;
@@ -185,8 +244,8 @@ const App = {
       <form id="frm-rej">
         ${App.champsDepot()}
         <input type="text" name="username" value="essor" autocomplete="username" hidden>
-        <label>Phrase de passe<input type="password" id="pj" autocomplete="current-password"
-          autocapitalize="off" autocorrect="off" spellcheck="false" required></label>
+        <label>Phrase de passe</label>
+        ${UI.secret('pj', { autocomplete: 'current-password', requis: true })}
         <div class="erreur" id="err-rej"></div>
         <button class="primary" type="submit">Récupérer mes données</button>
       </form>`;
@@ -217,8 +276,8 @@ const App = {
       <p class="hint">Un <code>essor-data.json</code> issu de la version locale, ou une sauvegarde
       chiffrée <code>.json.enc</code>. Vous choisirez ensuite la phrase de passe qui protégera ces données.</p>
       <input type="file" id="f-fichier" accept=".json,.enc,application/json">
-      <label id="lbl-ph-src" style="display:none">Phrase de passe du fichier chiffré
-        <input type="password" id="ph-src" autocomplete="off"></label>
+      <div id="lbl-ph-src" style="display:none"><label>Phrase de passe du fichier chiffré</label>
+        ${UI.secret('ph-src', { autocomplete: 'off' })}</div>
       <div class="erreur" id="err-fic"></div>
       <button class="primary" id="btn-fic">Lire le fichier</button>`;
     let texte = null;
@@ -257,19 +316,57 @@ const App = {
     App.render();
     UI.renderSaveStatus(Store.saveStatus, Store.mode);
     App.armerVerrouAuto();
+    // Le navigateur se réserve d'effacer les données d'un site « de passage »
+    // quand la place manque : on demande le statut durable dès l'ouverture.
+    Install.rendreDurable();
+    // L'installabilité peut n'être annoncée qu'après coup : l'écran Réglages
+    // doit alors se remettre à jour tout seul.
+    Install.onChange = () => { if (App.current === 'reglages') ScreenReglages.renderInstallation(); };
+    // L'autre appareil était simplement en avance : on l'a suivi, on le dit,
+    // et on ne demande rien — il n'y avait rien à arbitrer.
+    Store.onFastForward = (doc) => {
+      Engine.invalidate();
+      App.render();
+      const par = doc.majPar && doc.majPar.nom ? ` (${doc.majPar.nom})` : '';
+      UI.toast(`Données mises à jour depuis l'autre appareil${par}.`);
+    };
+    App.armerSondage();
   },
 
   // À l'ouverture d'une session, le dépôt peut porter le travail d'un autre
   // appareil : on va le chercher avant que l'utilisateur ne touche à quoi que ce soit.
-  async rattraperDepot() {
+  async rattraperDepot({ discret = false } = {}) {
+    if (Store.mode !== 'sync' || App._rattrapageEnCours) return;
+    // Un seul appel, qui ne rapporte que le numéro de version : inutile de
+    // télécharger le fichier tant que le dépôt n'a pas bougé.
+    if (discret && !(await Store.aDuNeuf()) && !Store._enAttente &&
+        Store.signature() === Store._sigEnvoyee) return;
+    App._rattrapageEnCours = true;
+    try {
+      const r = await Store.rafraichir();
+      if (r === 'repris') {
+        Engine.invalidate();
+        App.render();
+        UI.toast('Données mises à jour depuis le dépôt.');
+      }
+      if (Store._enAttente) await Store.synchroniser();
+    } finally { App._rattrapageEnCours = false; }
+  },
+
+  _rattrapageEnCours: false,
+  _sondage: null,
+
+  // Interrogation périodique tant que la fenêtre est visible : c'est ainsi
+  // qu'un appareil apprend qu'un autre a travaillé AVANT d'écrire lui-même —
+  // une mise à jour plutôt qu'une divergence à arbitrer.
+  armerSondage() {
+    clearInterval(App._sondage);
     if (Store.mode !== 'sync') return;
-    const r = await Store.rafraichir();
-    if (r === 'repris') {
-      Engine.invalidate();
-      App.render();
-      UI.toast('Données mises à jour depuis le dépôt.');
-    }
-    if (Store._enAttente) Store.synchroniser();
+    App._sondage = setInterval(() => {
+      if (document.visibilityState === 'visible' && !Store.conflit) {
+        App.rattraperDepot({ discret: true });
+      }
+    }, 45000);
   },
 
   /* ---------- Verrouillage automatique ---------- */
@@ -292,7 +389,7 @@ const App = {
       reset();
       // De retour sur l'onglet (ou l'application, sur téléphone) : le dépôt
       // a pu bouger entre temps.
-      if (Store.state) App.rattraperDepot();
+      if (Store.state) App.rattraperDepot({ discret: true });
     });
     reset();
   },
@@ -332,36 +429,70 @@ const App = {
 
   _conflitOuvert: false,
 
+  // Quand elle survient — les deux appareils ont vraiment modifié des données
+  // depuis leur dernier point commun — la question ne peut pas être posée dans
+  // l'abstrait : il faut dire quand, par qui, et sur quoi ils divergent.
   conflitModal() {
     if (App._conflitOuvert) return;
     App._conflitOuvert = true;
+    const info = Store.conflitInfo || {};
+    const quand = (iso) => iso ? new Date(iso).toLocaleString('fr-FR') : 'date inconnue';
+    const qui = (p) => p && p.nom ? U.escapeHtml(p.nom) : 'appareil inconnu';
+    const NOMS = {
+      transactions: 'opérations', accounts: 'comptes', certifications: 'certifications de solde',
+      trades: 'mouvements de titres', positionSnapshots: 'positions', goals: 'objectifs',
+      credits: 'crédits', rules: 'règles de catégorisation',
+    };
+    const r = info.resume || { collections: [], reglages: false };
+    const detail = r.collections.length || r.reglages
+      ? `<table style="margin:10px 0">
+          <tr><th>Ce qui diffère</th><th class="num">Ici seulement</th><th class="num">Là-bas seulement</th></tr>
+          ${r.collections.map(c => `<tr><td>${NOMS[c.nom] || c.nom}</td>
+            <td class="num">${c.ici || '—'}</td><td class="num">${c.la || '—'}</td></tr>`).join('')}
+          ${r.reglages ? '<tr><td>Réglages, budget ou cibles</td><td class="num" colspan="2">modifiés des deux côtés</td></tr>' : ''}
+        </table>`
+      : '<p class="small">Les deux versions diffèrent sans qu\'aucune fiche n\'ait été ajoutée ou retirée.</p>';
+
     const m = UI.modal(`
-      <h2>Ces données ont été modifiées ailleurs</h2>
-      <p>Le fichier du dépôt a changé depuis que cette session l'a ouvert —
-      Essor a été utilisé sur un autre appareil.</p>
-      <p class="small">Rien n'a été écrasé : l'enregistrement dans le dépôt est suspendu jusqu'à votre choix.
-      Vos données restent enregistrées sur cet appareil, et la version écartée est conservée dans « backups ».</p>
+      <h2>Les deux appareils ont travaillé chacun de leur côté</h2>
+      <div class="grid c2" style="gap:10px;margin-bottom:6px">
+        <div class="card" style="margin:0"><h3>Ici — ${qui(info.local && info.local.par) || 'cet appareil'}</h3>
+          <div class="small">Dernière modification envoyée : ${quand(info.local && info.local.maj)}</div></div>
+        <div class="card" style="margin:0"><h3>Dans le dépôt — ${qui(info.distant && info.distant.par)}</h3>
+          <div class="small">Dernière modification : ${quand(info.distant && info.distant.maj)}</div></div>
+      </div>
+      ${detail}
+      <p class="small">Rien n'a été écrasé, et vos données restent enregistrées sur cet appareil.
+      La version écartée est conservée dans « backups ».</p>
       <div class="actions">
-        <button data-x="autre">Reprendre la version de l'autre appareil</button>
-        <button class="primary" data-x="moi">Garder ma session en cours</button>
-      </div>`);
+        <button data-x="autre">Reprendre celle du dépôt</button>
+        <button data-x="moi">Garder la mienne</button>
+        <button class="primary" data-x="fusion">Réunir les deux</button>
+      </div>
+      <div class="hint" style="margin-top:8px">« Réunir » garde tout ce qui existe d'un côté ou de
+      l'autre ; ce qui a été modifié des deux côtés revient à la version la plus récente. Les relevés
+      importés en double ne sont pas dupliqués.</div>`);
     const fermer = () => { App._conflitOuvert = false; m.close(); };
-    m.el.querySelector('[data-x="autre"]').onclick = async (e) => {
-      await UI.busy(e.target, async () => {
-        await Store.reprendreLautreVersion();
-        Engine.invalidate();
-        fermer();
-        UI.toast('Données rechargées depuis le dépôt.');
-        App.render();
-      });
-    };
-    m.el.querySelector('[data-x="moi"]').onclick = async (e) => {
-      await UI.busy(e.target, async () => {
-        await Store.imposerMaVersion();
-        fermer();
-        UI.toast('Votre session a été poussée ; la version écartée est conservée dans « backups ».');
-      });
-    };
+    // La modale se referme quoi qu'il arrive : si le dépôt a bougé une
+    // seconde fois pendant l'arbitrage, la question est reposée au lieu d'être
+    // avalée par le garde-fou d'unicité — c'est ainsi qu'on restait bloqué,
+    // conflit non résolu et plus rien à l'écran pour le dire.
+    const arbitrer = (bouton, action, message) => UI.busy(bouton, async () => {
+      try { await action(); }
+      finally { fermer(); }
+      if (Store.conflit) { App.conflitModal(); return; }
+      Engine.invalidate();
+      App.render();
+      UI.toast(message);
+    });
+    m.el.querySelector('[data-x="autre"]').onclick = (e) =>
+      arbitrer(e.target, () => Store.reprendreLautreVersion(), 'Données rechargées depuis le dépôt.');
+    m.el.querySelector('[data-x="moi"]').onclick = (e) =>
+      arbitrer(e.target, () => Store.imposerMaVersion(),
+        'Votre session a été poussée ; la version écartée est conservée dans « backups ».');
+    m.el.querySelector('[data-x="fusion"]').onclick = (e) =>
+      arbitrer(e.target, () => Store.fusionner(),
+        'Les deux versions ont été réunies, puis envoyées au dépôt.');
   },
 
   render() {

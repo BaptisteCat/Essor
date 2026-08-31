@@ -119,10 +119,24 @@ const Depot = {
     const r = await Depot._appel(url, {
       method: 'PUT', headers: Depot._entetes({ 'Content-Type': 'application/json' }), body: JSON.stringify(corps),
     });
-    if (r.status === 409 || r.status === 422) {
+    // 409 = la version déclarée n'est plus la bonne : un autre appareil est
+    // passé par là. 422 est plus ambigu — c'est aussi ce que répond GitHub
+    // quand on crée un fichier qui existe déjà (sha manquant), donc un conflit
+    // lui aussi ; mais c'est encore sa réponse à une branche inconnue ou à un
+    // contenu hors limites, qu'il serait absurde de faire arbitrer.
+    if (r.status === 409) {
       const err = new Error('CONFLIT');
       err.code = 'CONFLIT';
       throw err;
+    }
+    if (r.status === 422) {
+      const detail = (await r.text().catch(() => '')).slice(0, 400);
+      if (/sha|already exists|does not match/i.test(detail)) {
+        const err = new Error('CONFLIT');
+        err.code = 'CONFLIT';
+        throw err;
+      }
+      throw new Error(`GitHub a refusé l'écriture : ${detail || 'requête invalide (422)'}`);
     }
     if (!r.ok) throw new Error(`Écriture refusée par GitHub (${r.status}).`);
     const j = await r.json();

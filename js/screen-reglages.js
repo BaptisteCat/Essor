@@ -91,6 +91,11 @@ const ScreenReglages = {
       </div>
 
       <div class="card">
+        <h2>Cet appareil</h2>
+        <div id="rg-installation"></div>
+      </div>
+
+      <div class="card">
         <h2>Sécurité de cet appareil</h2>
         <div id="rg-securite"></div>
       </div>
@@ -105,6 +110,7 @@ const ScreenReglages = {
     ScreenReglages.renderGoals();
     ScreenReglages.renderSymbols();
     ScreenReglages.renderSync();
+    ScreenReglages.renderInstallation();
     ScreenReglages.renderSecurite();
     ScreenReglages.renderDonnees();
 
@@ -134,7 +140,11 @@ const ScreenReglages = {
       c'est lui qui porte vos données d'un appareil à l'autre. GitHub n'en voit qu'un bloc d'octets —
       votre phrase de passe ne quitte jamais l'appareil, et sans elle le fichier est inexploitable.</p>
       ${actif
-        ? `<div class="notice gold">Synchronisé avec <b>${U.escapeHtml(s.owner)}/${U.escapeHtml(s.repo)}</b>
+        ? `${Store.conflit ? `<div class="notice warn"><b>Le dépôt attend votre arbitrage.</b>
+               Il a été modifié ailleurs depuis que cette session l'a ouvert. Vos données restent
+               enregistrées sur cet appareil, mais plus rien ne part tant que vous n'avez pas tranché.
+               <br><button class="primary" id="rg-conflit" style="margin-top:8px">Trancher maintenant…</button></div>` : ''}
+           <div class="notice gold">Synchronisé avec <b>${U.escapeHtml(s.owner)}/${U.escapeHtml(s.repo)}</b>
              — fichier <code>${U.escapeHtml(s.chemin)}</code> sur la branche <code>${U.escapeHtml(s.branch)}</code>.
              ${Store._enAttente ? `<br><b>En attente d'envoi.</b> ${U.escapeHtml(Store._raisonAttente || '')}` : ''}</div>
            <button id="rg-sync-now">Synchroniser maintenant</button>
@@ -167,6 +177,7 @@ const ScreenReglages = {
         if (!info.ecriture) { err.textContent = 'Ce jeton n\'a pas le droit d\'écrire dans ce dépôt (Contents : read and write).'; return; }
         await Store.configurerDepot(cfg);
         await Store.save();
+        App.armerSondage();
         ScreenReglages.renderSync();
         UI.toast(info.prive
           ? `Synchronisation active avec ${info.nomComplet}.`
@@ -174,7 +185,10 @@ const ScreenReglages = {
       });
     };
     if (!actif) return;
+    const bConflit = document.getElementById('rg-conflit');
+    if (bConflit) bConflit.onclick = () => App.conflitModal();
     document.getElementById('rg-sync-now').onclick = (e) => UI.busy(e.target, async () => {
+      if (Store.conflit) { App.conflitModal(); return; }
       const r = await Store.rafraichir();
       if (r === 'repris') { Engine.invalidate(); App.render(); UI.toast('Données reprises depuis le dépôt.'); return; }
       await Store.synchroniser();
@@ -184,14 +198,67 @@ const ScreenReglages = {
     document.getElementById('rg-sync-off').onclick = (e) => UI.confirm(
       'Ne plus synchroniser cet appareil ?',
       'Le fichier du dépôt reste en place ; cet appareil cesse simplement de le lire et de l\'écrire.',
-      async () => { await Store.oublierDepot(); ScreenReglages.renderSync(); UI.toast('Synchronisation désactivée.'); });
+      async () => { await Store.oublierDepot(); App.armerSondage(); ScreenReglages.renderSync(); UI.toast('Synchronisation désactivée.'); });
+  },
+
+  /* ---------- Installation sur l'appareil ---------- */
+
+  async renderInstallation() {
+    const holder = document.getElementById('rg-installation');
+    if (!holder) return;
+    const installee = Install.installee();
+    const stock = await Install.etatStockage();
+    // Un rendu qui attend peut revenir après un changement d'écran : ses
+    // éléments n'existent plus, et rien ne doit être branché sur du vide.
+    if (!document.body.contains(holder)) return;
+    const durable = {
+      accorde: 'protégé de l\'effacement automatique',
+      refuse: 'pas encore protégé de l\'effacement automatique',
+      inconnu: 'de statut inconnu',
+    }[stock.durable];
+    const place = stock.utilise != null
+      ? `${(stock.utilise / 1048576).toFixed(1)} Mo utilisés${stock.quota ? ` sur ${Math.round(stock.quota / 1048576)} Mo disponibles` : ''}`
+      : null;
+
+    holder.innerHTML = `
+      ${installee
+        ? `<div class="notice gold">Essor est <b>installée</b> sur cet appareil : elle s'ouvre en plein
+             écran depuis l'écran d'accueil, et fonctionne sans réseau.</div>`
+        : `<p class="small">Installée, Essor s'ouvre depuis l'écran d'accueil comme n'importe quelle
+             application : plein écran, sans barre d'adresse, et utilisable hors réseau — les données
+             sont déjà sur l'appareil, seule la synchronisation attend la connexion.</p>
+           ${!Install.servieCorrectement()
+             ? '<div class="notice warn">L\'installation exige une adresse en <code>https://</code> : ouvrez le site publié, pas une copie locale.</div>'
+             : Install.invitable()
+               ? '<button class="primary" id="inst-btn">Installer l\'application</button>'
+               : Install.instructions()}`}
+      <h3 style="margin-top:16px">Stockage de cet appareil</h3>
+      <p class="small">Le coffre chiffré est <b>${durable}</b>${place ? ` — ${place}` : ''}.
+      ${stock.durable === 'accorde'
+        ? 'Le navigateur s\'engage à ne pas l\'effacer pour faire de la place.'
+        : stock.durable === 'refuse'
+          ? 'Le navigateur peut l\'effacer s\'il manque de place — l\'installation rend en général ce statut durable. Raison de plus pour garder la synchronisation active.'
+          : 'Ce navigateur ne renseigne pas ce statut.'}</p>
+      ${Install.plateforme() === 'ios' && !installee ? `<div class="notice">
+        Sur iPhone, l'application installée dispose de son <b>propre stockage</b>, distinct de celui de
+        Safari : au premier lancement depuis l'écran d'accueil, elle vous redemandera la phrase de passe
+        et, si vous synchronisez, choisissez alors « Rejoindre mes données ».</div>` : ''}`;
+
+    if (!installee && Install.invitable()) {
+      App.brancherInstallation(() => ScreenReglages.renderInstallation());
+    }
   },
 
   /* ---------- Sécurité ---------- */
 
-  renderSecurite() {
+  async renderSecurite() {
     const s = Store.state.settings;
     const holder = document.getElementById('rg-securite');
+    const bioDispo = await Bio.disponible();
+    const bioActive = await Bio.configuree();
+    // Un rendu qui attend peut revenir après un changement d'écran : ses
+    // éléments n'existent plus, et rien ne doit être branché sur du vide.
+    if (!document.body.contains(holder)) return;
     holder.innerHTML = `
       <p class="small">L'application est publiée sur une adresse publique — c'est la seule chose que
       GitHub Pages sache faire. Ce qui protège vos données n'est donc pas l'adresse, mais le
@@ -205,7 +272,23 @@ const ScreenReglages = {
         <div class="field"><button id="rg-verrou-now">Verrouiller maintenant</button></div>
         <div class="field"><button id="rg-phrase">Changer la phrase de passe…</button></div>
       </div>
-      <div id="rg-phrase-form"></div>`;
+      <div id="rg-phrase-form"></div>
+
+      <h3 style="margin-top:16px">Déverrouillage sans saisie</h3>
+      ${!bioDispo
+        ? `<p class="small">Cet appareil ne propose pas de vérification biométrique à cette
+             adresse — il faudra saisir la phrase. Sur iPhone, elle n'est offerte qu'à une
+             application ouverte depuis l'écran d'accueil ou dans Safari.</p>`
+        : bioActive
+          ? `<div class="notice gold">Essor s'ouvre avec <b>${U.escapeHtml(Bio.nomLocal())}</b> sur cet appareil.
+               La phrase de passe reste toujours acceptée, et demeure le seul recours si vous
+               changez d'appareil.</div>
+             <button class="danger" id="rg-bio-off">Ne plus utiliser ${U.escapeHtml(Bio.nomLocal())}</button>`
+          : `<p class="small">Votre phrase de passe peut être scellée par <b>${U.escapeHtml(Bio.nomLocal())}</b> :
+               un regard ou une empreinte remplace la saisie. Le secret qui l'ouvre est dérivé par
+               l'appareil à chaque fois, jamais conservé — et ne sort ni de l'appareil, ni vers le dépôt.</p>
+             <button class="primary" id="rg-bio-on">Activer ${U.escapeHtml(Bio.nomLocal())}</button>`}
+      <div id="rg-bio-form"></div>`;
     document.getElementById('rg-verrou').onchange = (e) => {
       s.verrouillageMin = Number(e.target.value);
       Store.markDirty();
@@ -218,9 +301,9 @@ const ScreenReglages = {
         <div class="notice warn">La nouvelle phrase remplace l'ancienne <b>partout</b> : sur cet appareil
         et dans le dépôt. Vos autres appareils demanderont la nouvelle à leur prochaine ouverture.</div>
         <div class="row">
-          <div class="field"><label>Phrase actuelle</label><input type="password" id="rg-p0" autocomplete="off"></div>
-          <div class="field"><label>Nouvelle phrase</label><input type="password" id="rg-p1" autocomplete="off"></div>
-          <div class="field"><label>Répéter</label><input type="password" id="rg-p2" autocomplete="off"></div>
+          <div class="field"><label>Phrase actuelle</label>${UI.secret('rg-p0', { autocomplete: 'off' })}</div>
+          <div class="field"><label>Nouvelle phrase</label>${UI.secret('rg-p1', { autocomplete: 'new-password' })}</div>
+          <div class="field"><label>Répéter</label>${UI.secret('rg-p2', { autocomplete: 'new-password' })}</div>
           <div class="field"><button class="primary" id="rg-p-ok">Changer</button></div>
         </div>
         <div class="erreur" id="rg-p-err"></div>`;
@@ -233,9 +316,43 @@ const ScreenReglages = {
         try { await Store.changerPhrase(document.getElementById('rg-p0').value, p1); }
         catch (ex) { err.textContent = ex.message === 'PHRASE_INVALIDE' ? 'Phrase actuelle incorrecte.' : ex.message; return; }
         document.getElementById('rg-phrase-form').innerHTML = '';
+        ScreenReglages.renderSecurite();
         UI.toast('Phrase de passe changée. Notez-la : elle seule ouvre vos données.');
       });
     };
+
+    // Activer la biométrie exige de prouver qu'on connaît la phrase : sans
+    // cela, un appareil laissé déverrouillé suffirait à sceller n'importe quoi.
+    const bOn = document.getElementById('rg-bio-on');
+    if (bOn) bOn.onclick = () => {
+      document.getElementById('rg-bio-form').innerHTML = `
+        <div style="margin-top:10px">
+          <p class="small">Confirmez votre phrase de passe : c'est elle que l'appareil scellera.</p>
+          <div class="row">
+            <div class="field" style="min-width:240px"><label>Phrase de passe</label>
+              ${UI.secret('rg-bio-ph', { autocomplete: 'current-password' })}</div>
+            <div class="field"><button class="primary" id="rg-bio-ok">Sceller avec ${U.escapeHtml(Bio.nomLocal())}</button></div>
+          </div>
+          <div class="erreur" id="rg-bio-err"></div>
+        </div>`;
+      document.getElementById('rg-bio-ok').onclick = (e) => UI.busy(e.target, async () => {
+        const err = document.getElementById('rg-bio-err');
+        err.textContent = '';
+        const phrase = document.getElementById('rg-bio-ph').value;
+        try { await Coffre.ouvrir(phrase, await Store._get('coffre')); }
+        catch { err.textContent = 'Phrase de passe incorrecte.'; return; }
+        try { await Bio.activer(phrase); }
+        catch (ex) { err.textContent = ex.message; return; }
+        ScreenReglages.renderSecurite();
+        UI.toast(`Essor s'ouvrira désormais avec ${Bio.nomLocal()} sur cet appareil.`);
+      });
+    };
+
+    const bOff = document.getElementById('rg-bio-off');
+    if (bOff) bOff.onclick = () => UI.confirm(
+      'Ne plus déverrouiller sans saisie ?',
+      'La phrase de passe sera redemandée à chaque ouverture sur cet appareil. Vos données ne bougent pas.',
+      async () => { await Bio.desactiver(); ScreenReglages.renderSecurite(); UI.toast('Déverrouillage biométrique retiré.'); });
   },
 
   /* ---------- Données et sauvegardes ---------- */
@@ -243,6 +360,9 @@ const ScreenReglages = {
   async renderDonnees() {
     const holder = document.getElementById('rg-donnees');
     const locales = await Store.listerSauvegardesLocales();
+    // Un rendu qui attend peut revenir après un changement d'écran : ses
+    // éléments n'existent plus, et rien ne doit être branché sur du vide.
+    if (!document.body.contains(holder)) return;
     holder.innerHTML = `
       <p class="small">Une sauvegarde est prise automatiquement avant chaque action destructrice (EX-95).
       Elle est chiffrée, gardée sur cet appareil (les 12 dernières) et déposée dans <b>backups/</b> du
@@ -263,7 +383,7 @@ const ScreenReglages = {
           <td class="num">${Math.round(b.taille / 1024)} Ko</td>
           <td class="num"><button data-restaurer="${U.escapeHtml(b.nom)}">Restaurer</button></td></tr>`).join('')}
       </table>` : '<div class="empty">Aucune sauvegarde locale pour l\'instant.</div>'}
-      <h3 style="margin-top:16px">Cet appareil</h3>
+      <h3 style="margin-top:16px">Effacement</h3>
       <button class="danger" id="rg-effacer">Effacer les données de cet appareil…</button>
       <div class="hint">N'efface que ce navigateur. ${Store.mode === 'sync'
         ? 'Le dépôt garde tout : cet appareil pourra les récupérer avec la phrase de passe.'
@@ -285,7 +405,7 @@ const ScreenReglages = {
         données de cette session. Une sauvegarde est prise avant.</div>
         <div class="row">
           <div class="field"><input type="file" id="rg-f" accept=".json,.enc,application/json"></div>
-          <div class="field"><label>Phrase (si fichier chiffré)</label><input type="password" id="rg-f-ph" autocomplete="off"></div>
+          <div class="field"><label>Phrase (si fichier chiffré)</label>${UI.secret('rg-f-ph', { autocomplete: 'off' })}</div>
           <div class="field"><button class="danger" id="rg-f-ok">Remplacer les données</button></div>
         </div>
         <div class="erreur" id="rg-f-err"></div>`;
