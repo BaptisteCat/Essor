@@ -693,6 +693,61 @@ try {
     bac.remove();
   }
 
+  /* ---- Deux exports, une opération : les libellés apparentés ---- */
+  {
+    check('Libellés — les mots du court contenus dans le long : apparentés',
+      U.libellesApparentes('SYLVIE NOACHOVITCH   ASSOCIE',
+        'VIREMENT SEPA RECU SYLVIE NOACHOVITCH ASSOCIE GRATIFICATION STAGE AOUT 2026 CRLYFRPPXXX'));
+    check('Libellés — deux commerçants distincts au même prix ne partagent pas leurs mots',
+      !U.libellesApparentes('CARREFOUR CITY', 'AUCHAN DRIVE') &&
+      !U.libellesApparentes('FRANPRIX', 'MONOPRIX'));
+    check("Libellés — un libellé vidé par la normalisation ne s'apparente à rien",
+      !U.libellesApparentes('VIREMENT', 'VIREMENT BAPTISTE DUPONT'));
+
+    // À l'import : le second export de la même opération est écarté.
+    const S = fresh();
+    S.accounts.push({ id: 'cc', name: 'BRED', type: 'courant', order: 0 });
+    const bredExport = 'Date;Type;Montant;Commentaire;Détail 1;Détail 2' + String.fromCharCode(10) +
+      '28/08/2026;VIREMENT SEPA RECU;1167,36;;SYLVIE NOACHOVITCH   ASSOCIE;GRATIFICATION STAGE AOUT 2026' + String.fromCharCode(10);
+    const autreExport = 'Date;Libelle;Montant' + String.fromCharCode(10) +
+      '28/08/2026;VIREMENT SEPA RECU SYLVIE NOACHOVITCH ASSOCIE GRATIFICATION STAGE AOUT 2026 CRLYFRPPXXX;1167,36' + String.fromCharCode(10) +
+      '28/08/2026;OPERATION SANS RAPPORT;-5,00' + String.fromCharCode(10);
+    const imp = async (txt, nom) => {
+      const ses = await Importer.analyze([{ name: nom, bytes: new TextEncoder().encode(txt) }]);
+      return Importer.apply(ses, { [ses.files[0].path]: 'cc' });
+    };
+    const r1 = await imp(bredExport, 'bred.csv');
+    const r2 = await imp(autreExport, 'archive.csv');
+    check("Import — le même salaire venu d'un AUTRE export est écarté, le reste entre",
+      r1.added === 1 && r2.added === 1 && r2.dup === 1 &&
+      S.transactions.filter(t => /NOACHOVITCH/.test(t.label)).length === 1,
+      `ajoutés ${r2.added}, doublons ${r2.dup}`);
+
+    // Déjà en base (importé avant le correctif) : le détecteur le signale.
+    S.transactions.push({ id: 'vieux', accountId: 'cc', date: '2026-08-28', amount: 116736,
+      label: 'VIREMENT SEPA RECU SYLVIE NOACHOVITCH ASSOCIE GRATIFICATION STAGE AOUT 2026 CRLYFRPPXXX', hash: 'autre' });
+    const paires = Rules.doublonsSuspects();
+    check('Doublons — le salaire en double sous deux libellés, même jour, est signalé',
+      paires.length === 1 && /NOACHOVITCH/.test(paires[0].a.label));
+
+    // Deux courses au même prix la même semaine ne sont PAS des doublons : la
+    // date que la banque glisse dans le libellé les distingue.
+    S.transactions.push({ id: 'f1', accountId: 'cc', date: '2026-03-16', amount: -1270,
+      label: 'FRANPRIX                  LE 13/03/26', hash: 'f1' });
+    S.transactions.push({ id: 'f2', accountId: 'cc', date: '2026-03-17', amount: -1270,
+      label: 'FRANPRIX                  LE 17/03/26', hash: 'f2' });
+    check('Doublons — deux courses Franprix au même prix la même semaine restent deux courses',
+      Rules.doublonsSuspects().length === 1);
+    // Mais le même relevé réimporté sous une autre colonne de date — libellés
+    // bruts IDENTIQUES — reste détecté.
+    S.transactions.push({ id: 'g1', accountId: 'cc', date: '2026-03-20', amount: -1270,
+      label: 'FRANPRIX                  LE 19/03/26', hash: 'g1' });
+    S.transactions.push({ id: 'g2', accountId: 'cc', date: '2026-03-21', amount: -1270,
+      label: 'FRANPRIX                  LE 19/03/26', hash: 'g2' });
+    check("Doublons — le même libellé au caractère près, à un jour d'écart, est signalé",
+      Rules.doublonsSuspects().length === 2);
+  }
+
   /* ---- Virement vers mes propres comptes, vu d'une seule face ---- */
   {
     const S = fresh();

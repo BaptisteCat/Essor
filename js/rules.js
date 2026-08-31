@@ -530,21 +530,44 @@ const Rules = {
     const S = Rules.S();
     if (!S.dismissedDupes) S.dismissedDupes = [];
     const paires = [];
-    const parCle = U.groupBy(S.transactions, t => `${t.accountId}|${t.amount}|${U.normLabel(t.label)}`);
+    const vues = new Set();
+    const poser = (a, b) => {
+      const sig = [a.id, b.id].sort().join('~');
+      if (vues.has(sig) || S.dismissedDupes.includes(sig)) return;
+      vues.add(sig);
+      // Les gros montants d'abord : c'est le salaire doublé qui fait mal.
+      paires.push({ sig, a, b, poids: Math.abs(a.amount) });
+    };
+
+    // 1. Même libellé BRUT, même montant, à quelques jours d'écart : le même
+    //    relevé importé sous deux colonnes de date — les libellés y sont
+    //    identiques au caractère près. Comparer les libellés normalisés
+    //    prenait deux courses Franprix de la même semaine pour un doublon :
+    //    la normalisation efface la date que la banque glisse dans le libellé
+    //    (« LE 13/03 »), qui est justement ce qui les distingue.
+    const parCle = U.groupBy(S.transactions, t => `${t.accountId}|${t.amount}|${t.label.replace(/\s+/g, ' ').trim()}`);
     for (const [, groupe] of parCle) {
       if (groupe.length < 2) continue;
       const tris = [...groupe].sort((a, b) => a.date < b.date ? -1 : 1);
       for (let i = 0; i < tris.length - 1; i++) {
-        const a = tris[i], b = tris[i + 1];
-        const ecart = Rules._dayDiff(a.date, b.date);
-        // Même jour même libellé : déjà arbitré par l'import (deux cafés
-        // identiques sont légitimes). Suspect : proche mais PAS identique.
-        if (ecart < 1 || ecart > 4) continue;
-        const sig = [a.id, b.id].sort().join('~');
-        if (S.dismissedDupes.includes(sig)) continue;
-        paires.push({ sig, a, b, ecart,
-          // Les gros montants d'abord : c'est le salaire doublé qui fait mal.
-          poids: Math.abs(a.amount) });
+        const ecart = Rules._dayDiff(tris[i].date, tris[i + 1].date);
+        if (ecart >= 1 && ecart <= 4) poser(tris[i], tris[i + 1]);
+      }
+    }
+
+    // 2. Même jour, même montant, libellés DIFFÉRENTS mais apparentés : la
+    //    même opération vue par deux exports — « SYLVIE N. ASSOCIE » contre
+    //    « VIREMENT SEPA RECU SYLVIE N. ASSOCIE GRATIFICATION… ». Deux
+    //    commerçants distincts au même prix ne partagent pas leurs mots.
+    const parJour = U.groupBy(S.transactions, t => `${t.accountId}|${t.date}|${t.amount}`);
+    for (const [, groupe] of parJour) {
+      if (groupe.length < 2) continue;
+      for (let i = 0; i < groupe.length; i++) {
+        for (let j = i + 1; j < groupe.length; j++) {
+          const a = groupe[i], b = groupe[j];
+          if (U.normLabel(a.label) === U.normLabel(b.label)) continue;
+          if (U.libellesApparentes(a.label, b.label)) poser(a, b);
+        }
       }
     }
     return paires.sort((x, y) => y.poids - x.poids);

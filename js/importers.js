@@ -695,9 +695,17 @@ const Importer = {
   // s'en trouvait durablement faux, sans que rien ne le signale.
   _retenir(session, resoudre) {
     const enBase = new Map();
+    // Second filet : la même opération décrite par un AUTRE export porte un
+    // libellé différent — l'empreinte ne la voit pas. On garde donc, par
+    // (compte, date, montant), les libellés déjà en base : un candidat au
+    // libellé apparenté est un doublon, consommé une fois chacun.
+    const parJourMontant = new Map();
     for (const t of Store.state.transactions) {
       const k = `${t.accountId}|${t.hash}`;
       enBase.set(k, (enBase.get(k) || 0) + 1);
+      const kj = `${t.accountId}|${t.date}|${t.amount}`;
+      if (!parJourMontant.has(kj)) parJourMontant.set(kj, []);
+      parJourMontant.get(kj).push({ label: t.label, pris: 0 });
     }
     const vus = new Map();   // occurrences déjà retenues dans CETTE session
     for (const file of session.files) {
@@ -708,9 +716,14 @@ const Importer = {
         const h = Importer.txHash(acc, row);
         const k = `${acc}|${h}`;
         const dejaVus = vus.get(k) || 0;
-        if (dejaVus < (enBase.get(k) || 0)) file.dupCount++;   // cette occurrence est déjà en base
-        else file.newRows.push({ ...row, hash: h });
+        if (dejaVus < (enBase.get(k) || 0)) { file.dupCount++; vus.set(k, dejaVus + 1); continue; }
         vus.set(k, dejaVus + 1);
+        const candidats = parJourMontant.get(`${acc}|${row.date}|${row.amount}`) || [];
+        const jumeau = candidats.find(c => !c.pris &&
+          U.normLabel(c.label) !== U.normLabel(row.label) &&
+          U.libellesApparentes(c.label, row.label));
+        if (jumeau) { jumeau.pris = 1; file.dupCount++; continue; }
+        file.newRows.push({ ...row, hash: h });
       }
     }
   },

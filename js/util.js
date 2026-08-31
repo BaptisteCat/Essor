@@ -160,6 +160,24 @@ const U = {
     return null;
   },
 
+  /* ---------- Libellés apparentés ----------
+     Deux exports d'une même banque décrivent la même opération avec des
+     libellés différents : l'un concatène type, tiers et motif, l'autre ne
+     donne que le tiers. Les mots significatifs de l'un sont alors CONTENUS
+     dans l'autre — c'est ce qu'on teste, plutôt que l'égalité stricte. */
+
+  tokens(label) {
+    return new Set(U.normLabel(label).split(' ').filter(m => m.length >= 3));
+  },
+
+  libellesApparentes(a, b) {
+    const ta = U.tokens(a), tb = U.tokens(b);
+    if (!ta.size || !tb.size) return false;
+    const [petit, grand] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+    for (const m of petit) if (!grand.has(m)) return false;
+    return true;
+  },
+
   /* ---------- Texte ---------- */
 
   // Normalisation de libellé pour comparaison de règles : majuscules, sans accents,
