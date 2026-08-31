@@ -209,6 +209,7 @@ const ScreenReglages = {
           <div class="hint">Dernière synchronisation : ${U.escapeHtml(Banque.derniereMaj())}.</div>
         </div>
         ${sessions || '<div class="empty">Aucune banque autorisée pour l’instant.</div>'}
+        <div style="margin-top:12px"><button class="danger" id="bq-supprimer">Supprimer la connexion bancaire…</button></div>
       ` : ''}`;
 
     const champCle = document.getElementById('bq-cle');
@@ -248,6 +249,20 @@ const ScreenReglages = {
       b.auto = e.target.checked;
       Store.markDirty();
     };
+    document.getElementById('bq-supprimer').onclick = () => UI.confirm(
+      'Supprimer la connexion bancaire ?',
+      `Le relais, sa clé, les banques autorisées et les rattachements sont effacés d'Essor —
+       plus aucune synchronisation n'aura lieu. Les opérations déjà importées restent.
+       <b>Le consentement donné à la banque, lui, ne s'efface pas d'ici</b> : pour le révoquer,
+       passez par l'espace client de chaque banque ou par votre compte Enable Banking.`,
+      () => {
+        delete Store.state.settings.banque;
+        Store.markDirty();
+        ScreenReglages.renderBanque();
+        UI.toast('Connexion bancaire supprimée. Les imports de fichiers restent disponibles.');
+      },
+      { libelle: 'Supprimer', danger: true });
+
     holder.querySelectorAll('[data-renouveler]').forEach(x => x.onclick = (e) =>
       UI.busy(e.target, () => Banque.autoriser(x.dataset.renouveler)));
     holder.querySelectorAll('[data-oublier]').forEach(x => x.onclick = () => UI.confirm(
