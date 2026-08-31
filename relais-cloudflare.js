@@ -64,6 +64,19 @@ export default {
     const cors = corsEntetes(env, origine);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
+    // Point de santé, public : dit ce qui est configuré, jamais les valeurs.
+    // C'est ce qui permet de distinguer « secret absent » de « clé différente »
+    // sans jamais faire circuler un secret.
+    if (url.pathname === '/sante') {
+      return new Response(JSON.stringify({
+        relais: 'essor',
+        relais_cle_definie: !!env.RELAIS_CLE,
+        eb_app_id_defini: !!env.EB_APP_ID,
+        eb_cle_privee_definie: !!env.EB_CLE_PRIVEE,
+        origines: env.ORIGINES || '(absentes)',
+      }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } });
+    }
+
     // Le relais est à vous : sans la clé partagée, il ne répond rien.
     if (req.headers.get('X-Essor-Cle') !== env.RELAIS_CLE) {
       return new Response(JSON.stringify({ erreur: 'clé de relais absente ou invalide' }),
