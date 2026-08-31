@@ -98,33 +98,113 @@ téléphone, vous révoquez celui-là sans toucher aux autres.
 2. **Rejoindre mes données** : dépôt, jeton (celui de cet appareil), phrase de passe.
 3. Les données arrivent chiffrées et s'ouvrent localement.
 
-Sur téléphone, installez l'application : Safari → Partager → *Sur l'écran
-d'accueil* ; Chrome Android → menu → *Installer l'application*. Elle s'ouvre
-alors en plein écran et fonctionne hors ligne — les données sont déjà sur
-l'appareil, seule la synchronisation attend le réseau.
+## 6. Installer sur le téléphone
 
-## 6. Publier une mise à jour
+**Réglages → Cet appareil** dit à tout moment où en est l'installation, et
+donne la marche à suivre propre à la plateforme.
 
-`git push` sur le dépôt de l'application. Le service worker sert l'ancienne
-version le temps du chargement, puis récupère la nouvelle en arrière-plan :
-elle apparaît au lancement suivant. Pour la voir tout de suite, rechargez deux
-fois.
+- **Android (Chrome)** — un bouton **Installer l'application** apparaît dans
+  Réglages, et Chrome propose souvent l'installation de lui-même. Sinon :
+  menu ⋮ → *Ajouter à l'écran d'accueil*.
+- **iPhone / iPad (Safari)** — Safari n'offre aucun bouton : bouton **Partager**
+  (le carré avec la flèche) → **Sur l'écran d'accueil** → **Ajouter**. Il faut
+  vraiment Safari : Chrome sur iOS ne sait pas installer.
+- **Ordinateur (Chrome, Edge)** — icône d'installation à droite de la barre
+  d'adresse, ou menu ⋮ → *Installer Essor*.
 
-Après une modification de la liste des fichiers, incrémentez `CACHE` dans
-`sw.js` (`essor-v1` → `essor-v2`) : les anciens caches sont alors purgés.
+Une fois installée, Essor s'ouvre en plein écran depuis l'écran d'accueil, sans
+barre d'adresse, et **fonctionne hors réseau** : les données sont déjà sur
+l'appareil, seule la synchronisation attend la connexion. Le navigateur traite
+alors son stockage comme durable au lieu de celui d'un site de passage —
+Réglages → Cet appareil affiche ce statut.
+
+> **Sur iPhone, l'application installée a son propre stockage**, distinct de
+> celui de Safari. Au premier lancement depuis l'écran d'accueil, elle ne
+> connaît donc rien : choisissez **Rejoindre mes données**, avec le dépôt, un
+> jeton et la phrase de passe. C'est un nouvel appareil, du point de vue du
+> système.
+
+## 7. Ouvrir sans retaper la phrase
+
+Une phrase longue est la bonne serrure, mais la saisir à chaque ouverture au
+pouce est intenable. **Réglages → Sécurité → Déverrouillage sans saisie**
+propose de la sceller avec Face ID, Touch ID ou Windows Hello.
+
+Ce que fait Essor exactement : elle enregistre une **clé d'accès** (passkey) sur
+l'appareil, et lui fait dériver un secret stable — extension WebAuthn *PRF* —
+qui n'est livré qu'après vérification de votre identité par l'appareil. Ce
+secret chiffre la phrase de passe *sur cet appareil seulement*. Il n'est jamais
+conservé : il est recalculé à chaque déverrouillage, et ne part ni vers le
+dépôt, ni ailleurs.
+
+Rien n'est affaibli : sans votre visage, votre empreinte ou le code de
+l'appareil, le scellé ne s'ouvre pas — et il ne remplace pas la phrase, qui
+reste toujours acceptée et demeure le **seul** recours sur un nouvel appareil.
+À activer appareil par appareil, chacun avec sa propre clé d'accès.
+
+Deux cas où le bouton n'apparaît pas : le navigateur ne gère pas l'extension PRF
+(Essor le dit alors franchement plutôt que d'enregistrer une clé inutile), ou
+l'appareil n'a pas de vérification biométrique configurée.
+
+Et dans tous les cas, le petit œil au bout de chaque champ affiche ce que vous
+tapez — phrase de passe comme jeton d'accès.
+
+## 8. Publier une mise à jour
+
+`git push` sur le dépôt de l'application.
+
+La page elle-même est servie **par le réseau d'abord** : une version déployée
+arrive donc au rechargement suivant, sans manœuvre. Les scripts et la feuille de
+style, eux, sont servis du cache puis rafraîchis en arrière-plan — ils peuvent
+avoir un lancement de retard.
+
+**Dès que la liste des fichiers change** (un `js/` ajouté ou renommé),
+incrémentez `CACHE` dans `sw.js` (`essor-v2` → `essor-v3`). Le nouveau cache est
+constitué en entier avant d'entrer en service et les anciens sont purgés : c'est
+ce qui évite qu'une page neuve appelle un script périmé.
 
 ## Ce qui se passe quand deux appareils se croisent
 
-Le fichier du dépôt porte un identifiant de version (le `sha` GitHub). Essor
-n'écrit qu'en déclarant la version qu'il croit remplacer ; si elle a changé
-entre temps, GitHub refuse, et Essor vous le dit au lieu de trancher : reprendre
-la version de l'autre appareil, ou garder la sienne. Dans les deux cas, la
-version écartée est conservée dans `backups/` du dépôt, qu'Essor n'efface
-jamais.
+Essor ne synchronise que ce qui le mérite. **L'écran ouvert, le mois affiché et
+le cache d'instantanés appartiennent à l'appareil** et ne partent jamais dans le
+dépôt : consulter Essor sur le téléphone pendant qu'il est ouvert sur
+l'ordinateur ne crée donc aucune divergence. Et un contenu inchangé n'engendre
+aucune révision — le dépôt ne reçoit que de vraies modifications.
+
+Chaque envoi porte **l'heure exacte de la modification et le nom de l'appareil**
+qui l'a faite. À cela s'ajoute une empreinte du contenu, qui permet de
+reconnaître trois situations très différentes derrière un même refus de GitHub :
+
+| Situation | Ce que fait Essor |
+|---|---|
+| Le dépôt dit déjà ce que nous disons, ou porte notre propre envoi précédent | Il reprend le numéro de version et continue. **Rien n'est demandé.** |
+| L'autre appareil a modifié, pas nous | Sa version est adoptée. **Rien n'est demandé** — un message signale la mise à jour. |
+| Les deux ont modifié depuis leur dernier point commun | Là seulement, la question est posée. |
+
+Tant que la fenêtre est ouverte, Essor interroge le dépôt toutes les 45 secondes
+— **un seul appel, qui ne rapporte que le numéro de version** ; le fichier n'est
+téléchargé que s'il a réellement changé. C'est ainsi qu'un appareil apprend
+qu'un autre a travaillé *avant* d'écrire lui-même, et qu'une mise à jour ne se
+transforme pas en divergence.
+
+Quand la question se pose vraiment, elle est chiffrée : quel appareil, à quelle
+heure, et combien de fiches diffèrent de chaque côté. Trois réponses :
+
+- **Reprendre celle du dépôt** — la version locale part dans les sauvegardes.
+- **Garder la mienne** — la version du dépôt part dans `backups/`.
+- **Réunir les deux** — tout ce qui existe d'un côté ou de l'autre est conservé,
+  ce qui a été modifié des deux côtés revient à la version la plus récente, et
+  un relevé importé sur les deux appareils ne double pas les opérations : la
+  règle de dédoublonnage de l'import s'applique aussi à la fusion.
 
 Hors ligne, tout continue de fonctionner : l'enregistrement se fait sur
 l'appareil et l'indicateur affiche « synchronisation en attente ». L'envoi
 repart au retour du réseau.
+
+Tant qu'une divergence n'est pas tranchée, **l'appareil continue d'enregistrer**
+— seul l'envoi vers le dépôt est suspendu. L'indicateur affiche « le dépôt
+attend votre arbitrage » et se clique pour reposer la question ; le même bouton
+figure dans Réglages → Synchronisation.
 
 ## En cas de perte
 
@@ -133,4 +213,5 @@ repart au retour du réseau.
 | Un appareil | Rien. Révoquez son jeton, reprenez les données ailleurs avec la phrase. |
 | Le jeton | Rien. Générez-en un autre, collez-le dans Réglages → Synchronisation. |
 | Les données du navigateur | Rien si la synchronisation était active : « Rejoindre mes données » les récupère. |
-| **La phrase de passe** | **Tout.** Aucune récupération n'est possible, par construction. |
+| Le déverrouillage biométrique | Rien. Saisissez la phrase, puis réactivez-le dans Réglages. |
+| **La phrase de passe** | **Tout.** Aucune récupération n'est possible, par construction — la biométrie n'est qu'un raccourci vers elle, pas un substitut. |

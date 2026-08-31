@@ -10,7 +10,9 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="css/app.css">
 <link rel="icon" href="icone.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icone-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icone-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icone-180.png">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Essor">
@@ -55,6 +57,8 @@
 <script src="js/charts.js"></script>
 <script src="js/worldmap.js"></script>
 <script src="js/geomap.js"></script>
+<script src="js/biometrie.js"></script>
+<script src="js/install.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/screen-patrimoine.js"></script>
 <script src="js/screen-mois.js"></script>
@@ -65,7 +69,8 @@
 <script>
 // Application installable et utilisable hors ligne (le téléphone n'a pas
 // toujours de réseau ; les données, elles, sont déjà sur l'appareil).
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+// Le service worker exige un contexte sûr : HTTPS, ou localhost pour les essais.
+if ('serviceWorker' in navigator && Install.servieCorrectement()) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
 </script>

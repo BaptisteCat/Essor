@@ -46,6 +46,7 @@ const waitSuite = setInterval(() => {
 <script src="js/crypto.js"></script>
 <script src="js/github.js"></script>
 <script src="js/store.js"></script>
+<script src="js/biometrie.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/indices.js"></script>
 <script src="js/importers.js"></script>
@@ -348,96 +349,245 @@ try {
       JSON.parse(env).iv !== JSON.parse(env2).iv);
   }
 
-  /* ---- Dépôt de synchronisation : concurrence entre appareils (P1) ---- */
+  /* ---- Synchronisation : ne parler au dépôt que lorsqu'il y a lieu ---- */
   {
     // Faux dépôt et faux stockage local : la logique est éprouvée sans
     // toucher ni au réseau ni aux données réelles du navigateur.
     const local = new Map();
     const memoire = {
       get: Store._get, put: Store._put, del: Store._del, cle: Store._cle, sel: Store._sel,
-      state: Store.state, sha: Store._shaDistant, cfg: Depot.cfg,
+      state: Store.state, sha: Store._shaDistant, cfg: Depot.cfg, app: Store._appareil,
       lire: Depot.lire, ecrire: Depot.ecrire, shaCourant: Depot.shaCourant, sauv: Depot.deposerSauvegarde,
     };
     Store._get = async (k) => local.get(k);
     Store._put = async (k, v) => { local.set(k, v); };
     Store._del = async (k) => { local.delete(k); };
+    Store._appareil = { id: 'appareil-a', nom: 'Windows' };
 
     const distant = { texte: null, sha: null, backups: [] };
-    let compteur = 0;
+    let compteur = 0, envois = 0;
     Depot.cfg = { owner: 'moi', repo: 'essor-data', branch: 'main', chemin: 'd.enc', jeton: 'x' };
     Depot.lire = async () => (distant.texte ? { texte: distant.texte, sha: distant.sha } : null);
     Depot.shaCourant = async () => distant.sha;
     Depot.deposerSauvegarde = async (nom) => { distant.backups.push(nom); return { sha: 'b' }; };
     Depot.ecrire = async (texte, sha) => {
       if (sha !== distant.sha) { const e = new Error('CONFLIT'); e.code = 'CONFLIT'; throw e; }
-      distant.texte = texte; distant.sha = 'sha' + (++compteur);
+      distant.texte = texte; distant.sha = 'sha' + (++compteur); envois++;
       return { sha: distant.sha };
+    };
+    // Ce qu'un autre appareil déposerait.
+    const deposer = async (doc, sha) => {
+      distant.texte = await Coffre.sceller(Store._cle, Store._sel, doc);
+      distant.sha = sha;
     };
 
     const phrase = 'phrase de test suffisamment longue';
     const derive = await Coffre.deriver(phrase, null);
     Store._cle = derive.cle; Store._sel = derive.sel;
-    Store._shaDistant = null; Store.conflit = false; Store._enAttente = false;
+    Store._shaDistant = null; Store._sigBase = null; Store._sigEnvoyee = null;
+    Store.conflit = false; Store._enAttente = false; Store.onConflict = null;
 
-    Store.state = { schema: 1, marqueur: 'origine' };
+    const etat = (extra) => Object.assign(Store.migrate({ schema: 1 }), extra);
+
+    Store.state = etat({ goals: [{ id: 'g1', name: 'objectif', target: 100 }] });
     await Store._doSave();
-    check('Dépôt — le premier enregistrement dépose l\'enveloppe et retient sa version',
+    check('Dépôt — le premier enregistrement dépose l\'enveloppe et retient son point d\'accord',
       distant.texte && Store._shaDistant === distant.sha && Store.saveStatus === 'saved' &&
-      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'origine');
-    check('Dépôt — rien n\'est déposé en clair', !distant.texte.includes('origine'));
+      Store._sigEnvoyee === Store.signature() && local.get('sigEnvoyee') === Store._sigEnvoyee);
+    check('Dépôt — rien n\'est déposé en clair', !distant.texte.includes('objectif'));
+    check('Dépôt — l\'envoi porte l\'heure exacte et l\'appareil qui l\'a fait',
+      !!Store.state.maj && Store.state.majPar.nom === 'Windows',
+      `${Store.state.maj} par ${JSON.stringify(Store.state.majPar)}`);
 
-    // Un autre appareil a enregistré entre temps : la version du dépôt a changé.
-    distant.texte = await Coffre.sceller(Store._cle, Store._sel, { schema: 1, marqueur: 'autre appareil' });
-    distant.sha = 'venu-d-ailleurs';
-
-    Store.state = { schema: 1, marqueur: 'ma session' };
-    let alerte = 0;
-    Store.onConflict = () => alerte++;
+    // LA cause du va-et-vient : changer d'écran ou de mois n'est pas une
+    // modification des données, et ne doit rien envoyer du tout.
+    const avant = envois;
+    Store.state.ui.lastScreen = 'budget';
+    Store.state.ui.period = { kind: 'month', month: '2026-03' };
+    Store.state.snapshots = { '2026-03': { total: 1234 } };
+    Store.state.snapshotsDirty = true;
     await Store._doSave();
-    check('P1 — une version modifiée ailleurs n\'est jamais écrasée en silence',
-      Store.conflit === true && alerte === 1 &&
-      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'autre appareil',
-      `conflit=${Store.conflit}, alertes=${alerte}`);
-    check('P1 — les données restent malgré tout à l\'abri sur l\'appareil',
-      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).marqueur === 'ma session');
-    check('P1 — l\'envoi se suspend tant que le conflit dure',
-      await (async () => {
-        await Store._doSave();
-        return Store.conflit === true &&
-          (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'autre appareil';
-      })());
+    check('Sync — changer d\'écran, de mois ou d\'instantanés ne touche jamais au dépôt',
+      envois === avant && Store.saveStatus === 'saved' && distant.sha === Store._shaDistant,
+      `envois=${envois - avant}`);
+    check('Sync — ces réglages d\'affichage restent malgré tout enregistrés sur l\'appareil',
+      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).ui.lastScreen === 'budget');
 
-    await Store.imposerMaVersion();
-    check('P1 — garder sa session conserve la version écartée dans « backups »',
-      Store.conflit === false &&
-      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).marqueur === 'ma session' &&
-      distant.backups.some(n => /conflit/.test(n)),
-      distant.backups.join(', '));
+    // Deux enregistrements de suite sans rien changer : une seule révision.
+    const avant2 = envois;
+    await Store._doSave(); await Store._doSave();
+    check('Sync — un contenu inchangé n\'engendre aucune révision inutile', envois === avant2);
 
-    // L'autre choix : abandonner sa session et reprendre celle du dépôt.
-    distant.texte = await Coffre.sceller(Store._cle, Store._sel, { schema: 1, marqueur: 'venu du dépôt' });
-    distant.sha = 'sha-repris';
-    await Store.reprendreLautreVersion();
-    check('P1 — reprendre l\'autre version adopte le dépôt et sauvegarde la sienne',
-      Store.state.marqueur === 'venu du dépôt' && Store._shaDistant === 'sha-repris' &&
-      ((await Store.listerSauvegardesLocales()).some(b => /version-locale-ecartee/.test(b.nom))));
+    // L'autre appareil a travaillé, nous non : c'est une mise à jour, pas une
+    // divergence. Personne ne doit être interrogé.
+    let questions = 0, avances = 0;
+    Store.onConflict = () => questions++;
+    Store.onFastForward = () => avances++;
+    await deposer(etat({ goals: [{ id: 'g1', name: 'objectif', target: 100 },
+      { id: 'g2', name: 'venu du téléphone', target: 500 }],
+      maj: '2026-08-31T10:00:00.000Z', majPar: { id: 'appareil-b', nom: 'iPhone' } }), 'venu-du-tel');
+    const r = await Store.rafraichir();
+    check('Sync — quand seul l\'autre appareil a modifié, sa version est reprise sans rien demander',
+      r === 'repris' && questions === 0 && Store.state.goals.length === 2 &&
+      Store._shaDistant === 'venu-du-tel' && Store.saveStatus === 'saved',
+      `retour=${r}, questions=${questions}`);
+
+    // Le dépôt avance pendant qu'on ne fait que naviguer : l'enregistrement
+    // local ne doit rien déclencher, et l'interrogation périodique — un seul
+    // appel, qui ne rapporte que le numéro de version — suffit à le voir.
+    await deposer(etat({ goals: [{ id: 'g1', name: 'objectif', target: 100 },
+      { id: 'g2', name: 'venu du téléphone', target: 500 },
+      { id: 'g3', name: 'encore le téléphone', target: 700 }],
+      maj: '2026-08-31T11:00:00.000Z', majPar: { id: 'appareil-b', nom: 'iPhone' } }), 'encore-le-tel');
+    const avant3 = envois;
+    Store.state.ui.lastScreen = 'mois';       // modification purement locale
+    await Store._doSave();
+    check('Sync — naviguer pendant que le dépôt avance ne provoque ni envoi ni question',
+      envois === avant3 && questions === 0 && Store.conflit === false,
+      `envois=${envois - avant3}, questions=${questions}`);
+    check('Sync — l\'interrogation périodique voit que le dépôt a bougé sans rien télécharger',
+      await Store.aDuNeuf());
+    const r2 = await Store.rafraichir();
+    check('Sync — et sa version est alors reprise, toujours sans rien demander',
+      r2 === 'repris' && questions === 0 && Store.state.goals.length === 3 &&
+      Store._shaDistant === 'encore-le-tel',
+      `retour=${r2}, questions=${questions}`);
+
+    // Conflit fantôme : le dépôt ne porte que notre propre envoi, mais son
+    // numéro de version s'est perdu.
+    Store.state.goals.push({ id: 'g4', name: 'ajouté ici', target: 900 });
+    await Store._doSave();
+    const shaVrai = distant.sha;
+    Store._shaDistant = 'repere-perdu';
+    Store.state.goals.push({ id: 'g5', name: 'suite du travail', target: 1000 });
+    await Store._doSave();
+    check('Sync — un conflit fantôme (le dépôt ne porte que notre propre envoi) se résout seul',
+      questions === 0 && Store.conflit === false && Store.saveStatus === 'saved' &&
+      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).goals.length === 5,
+      `questions=${questions}, shaVrai=${shaVrai}`);
+
+    // Divergence réelle : chacun a modifié les données depuis le point commun.
+    await deposer(etat({ goals: [{ id: 'g1', name: 'objectif', target: 100 }, { id: 'g9', name: 'fait sur le téléphone', target: 42 }],
+      accounts: [{ id: 'cc', name: 'Compte courant', type: 'courant', order: 0 }],
+      transactions: [{ id: 't-tel', accountId: 'cc', date: '2026-08-10', amount: -500, label: 'BOULANGERIE', hash: 'h1' }],
+      maj: '2026-08-31T12:00:00.000Z', majPar: { id: 'appareil-b', nom: 'iPhone' } }), 'divergent');
+    Store.state.goals.push({ id: 'g6', name: 'fait ici', target: 77 });
+    Store.state.accounts = [{ id: 'cc', name: 'Compte courant', type: 'courant', order: 0 }];
+    Store.state.transactions = [
+      { id: 't-pc', accountId: 'cc', date: '2026-08-11', amount: -300, label: 'CAFE', hash: 'h2' },
+      { id: 't-commun', accountId: 'cc', date: '2026-08-10', amount: -500, label: 'BOULANGERIE', hash: 'h1' },
+    ];
+    Store.state.maj = '2026-08-31T13:00:00.000Z';
+    await Store._doSave();
+    check('Sync — une divergence réelle, elle, est bel et bien soumise à l\'utilisateur',
+      questions === 1 && Store.conflit === true && Store.saveStatus === 'conflit',
+      `questions=${questions}`);
+    const res = Store.conflitInfo.resume.collections;
+    check('Sync — la question est chiffrée : qui, quand, et ce qui diffère de chaque côté',
+      Store.conflitInfo.distant.par.nom === 'iPhone' &&
+      Store.conflitInfo.distant.maj === '2026-08-31T12:00:00.000Z' &&
+      res.some(c => c.nom === 'goals' && c.ici > 0 && c.la === 1) &&
+      res.some(c => c.nom === 'transactions' && c.ici === 2 && c.la === 1),
+      JSON.stringify(res));
+    check('P1 — pendant une divergence, l\'appareil continue d\'enregistrer',
+      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).goals.some(g => g.id === 'g6'));
+
+    // Réunir les deux : tout est gardé, et le relevé importé des deux côtés
+    // ne double pas (EX-27).
+    await Store.fusionner();
+    const ids = Store.state.goals.map(g => g.id);
+    const libelles = Store.state.transactions.map(t => t.label).sort();
+    check('Fusion — tout ce qui existait d\'un côté ou de l\'autre est conservé',
+      ids.includes('g6') && ids.includes('g9') && ids.includes('g1'), ids.join(','));
+    check('Fusion — une opération présente des deux côtés n\'est pas dupliquée (EX-27)',
+      libelles.length === 2 && libelles.join('|') === 'BOULANGERIE|CAFE', libelles.join('|'));
+    check('Fusion — le résultat est envoyé et le conflit refermé',
+      Store.conflit === false && Store.saveStatus === 'saved' &&
+      (await Coffre.ouvrirAvecCle(Store._cle, distant.texte)).transactions.length === 2);
 
     // Hors ligne : l'enregistrement local aboutit, seule la synchronisation attend.
     Depot.ecrire = async () => { const e = new Error('HORS_LIGNE'); e.code = 'HORS_LIGNE'; throw e; };
-    Store.state = { schema: 1, marqueur: 'dans le train' };
-    Store.conflit = false;
+    Store.state.goals.push({ id: 'g7', name: 'dans le train', target: 1 });
     await Store._doSave();
     check('Hors ligne — les données sont enregistrées sur l\'appareil, l\'envoi est simplement en attente',
       Store.saveStatus === 'local' && Store._enAttente === true &&
-      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).marqueur === 'dans le train');
+      (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).goals.some(g => g.id === 'g7'));
 
     Store._get = memoire.get; Store._put = memoire.put; Store._del = memoire.del;
     Store._cle = memoire.cle; Store._sel = memoire.sel; Store.state = memoire.state;
-    Store._shaDistant = memoire.sha; Store.onConflict = null; Store.conflit = false; Store._enAttente = false;
+    Store._shaDistant = memoire.sha; Store._appareil = memoire.app;
+    Store.onConflict = null; Store.onFastForward = null;
+    Store.conflit = false; Store.conflitInfo = null; Store._enAttente = false;
+    Store._sigBase = null; Store._sigEnvoyee = null;
     Depot.cfg = memoire.cfg; Depot.lire = memoire.lire; Depot.ecrire = memoire.ecrire;
     Depot.shaCourant = memoire.shaCourant; Depot.deposerSauvegarde = memoire.sauv;
-    check('Dépôt — le test rend la persistance intacte',
+    check('Sync — le test rend la persistance intacte',
       typeof Store._put === 'function' && Depot.cfg === memoire.cfg);
+  }
+
+  /* ---- Déverrouillage biométrique et champs secrets ---- */
+  {
+    const local = new Map();
+    const memoire = { get: Store._get, put: Store._put, del: Store._del, evaluer: Bio._evaluer,
+      create: navigator.credentials ? navigator.credentials.create : null };
+    Store._get = async (k) => local.get(k);
+    Store._put = async (k, v) => { local.set(k, v); };
+    Store._del = async (k) => { local.delete(k); };
+
+    // Seule l'évaluation PRF exige un geste physique : on la simule, tout le
+    // reste du mécanisme est éprouvé pour de bon.
+    const secretA = new Uint8Array(32).map((_, i) => (i * 37 + 11) % 256);
+    Bio._evaluer = async () => secretA;
+    if (navigator.credentials) {
+      navigator.credentials.create = async () => ({
+        rawId: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
+        getClientExtensionResults: () => ({ prf: { enabled: true } }),
+      });
+    }
+
+    const PHRASE = 'phrase de test suffisamment longue';
+    await Bio.activer(PHRASE);
+    const enreg = local.get('bio');
+    check('Biométrie — la phrase est scellée, jamais conservée en clair',
+      !!enreg && !JSON.stringify(enreg).includes(PHRASE) && Coffre.estEnveloppe(enreg.enveloppe),
+      Object.keys(enreg || {}).join(','));
+    check("Biométrie — le secret dérivé par l'appareil rouvre la phrase, à l'identique",
+      (await Bio.ouvrir()) === PHRASE);
+
+    Bio._evaluer = async () => new Uint8Array(32).fill(9);
+    let refuse = false;
+    try { await Bio.ouvrir(); } catch { refuse = true; }
+    check("Biométrie — un autre secret n'ouvre rien : le scellé est authentifié", refuse);
+
+    Bio._evaluer = async () => secretA;
+    check("Biométrie — la désactivation efface le scellé de l'appareil",
+      await (async () => { await Bio.desactiver(); return !(await Bio.configuree()); })());
+
+    // Changer de phrase doit resceller, sinon la biométrie ouvrirait sur une
+    // phrase périmée — c'est-à-dire sur rien.
+    await Bio.activer(PHRASE);
+    await Bio.resceller('une toute autre phrase de passe');
+    check('Biométrie — changer de phrase rescelle, jamais ne laisse un scellé périmé',
+      (await Bio.ouvrir()) === 'une toute autre phrase de passe');
+
+    Store._get = memoire.get; Store._put = memoire.put; Store._del = memoire.del;
+    Bio._evaluer = memoire.evaluer;
+    if (memoire.create) navigator.credentials.create = memoire.create;
+
+    // Le champ secret se montre et se remasque.
+    const bac = document.createElement('div');
+    bac.innerHTML = UI.secret('t-secret', { placeholder: 'phrase' });
+    document.body.appendChild(bac);
+    const champ = bac.querySelector('#t-secret');
+    const oeil = bac.querySelector('[data-oeil]');
+    const initial = champ.type;
+    oeil.click();
+    const montre = champ.type;
+    oeil.click();
+    check('Champ secret — la phrase peut être affichée puis remasquée',
+      initial === 'password' && montre === 'text' && champ.type === 'password',
+      `${initial} → ${montre} → ${champ.type}`);
+    bac.remove();
   }
 
   /* ---- QIF : un format sans en-tête, où la date est piégeuse ---- */

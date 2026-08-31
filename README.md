@@ -27,24 +27,53 @@ Mise en ligne pas à pas : **[DEPLOIEMENT.md](DEPLOIEMENT.md)**.
    locale d'Essor, ou une sauvegarde chiffrée).
 3. **Réglages → Synchronisation** pour brancher le dépôt privé.
 
-Sur téléphone, ajoutez le site à l'écran d'accueil : il s'ouvre alors en plein
-écran et fonctionne **hors ligne** — les données sont déjà sur l'appareil, seule
-la synchronisation attend le réseau.
+## Installer sur le téléphone
+
+**Réglages → Cet appareil** donne la marche à suivre et l'état d'installation.
+Sur Android, un bouton **Installer l'application** y apparaît ; sur iPhone,
+Safari → **Partager** → **Sur l'écran d'accueil** (Chrome iOS ne sait pas le
+faire) ; sur ordinateur, l'icône d'installation de la barre d'adresse.
+
+Installée, Essor s'ouvre en plein écran depuis l'écran d'accueil et **fonctionne
+hors ligne** — les données sont déjà sur l'appareil, seule la synchronisation
+attend le réseau. Le navigateur cesse aussi de traiter son stockage comme celui
+d'un site de passage susceptible d'être effacé pour faire de la place.
+
+Sur iPhone, l'application installée dispose de son **propre stockage**, distinct
+de Safari : à son premier lancement, choisissez *Rejoindre mes données*.
 
 ## Plusieurs appareils
 
 Chaque appareil garde son propre coffre chiffré et son propre jeton d'accès ; le
 dépôt privé sert de point de rendez-vous.
 
-Deux appareils qui modifient les données chacun de leur côté ne se marchent
-jamais dessus en silence : le fichier du dépôt porte un identifiant de version,
-et Essor n'écrit qu'en déclarant celle qu'il croit remplacer. Si elle a changé,
-l'enregistrement **se suspend** et vous choisissez — reprendre l'autre version,
-ou garder la vôtre. Dans les deux cas, la version écartée est conservée dans
-`backups/`.
+Seules les **données** se synchronisent : l'écran ouvert, le mois affiché et le
+cache d'instantanés restent propres à chaque appareil. Consulter Essor sur le
+téléphone pendant qu'il est ouvert sur l'ordinateur ne crée donc aucune
+divergence, et un contenu inchangé n'engendre aucune révision.
+
+Chaque envoi porte l'heure exacte de la modification et le nom de l'appareil.
+Quand le dépôt a bougé, Essor distingue trois cas : il ne porte que notre propre
+travail (il reprend le numéro de version, sans un mot), l'autre appareil est
+simplement en avance (sa version est adoptée, sans un mot), ou **les deux côtés
+ont réellement modifié des données** — et alors seulement la question est posée,
+chiffrée : quel appareil, à quelle heure, combien de fiches diffèrent. On peut
+reprendre l'une, l'autre, ou **réunir les deux** sans dupliquer les opérations.
+
+Tant que la fenêtre est ouverte, le dépôt est interrogé toutes les 45 secondes
+par un appel qui ne rapporte que le numéro de version — le fichier n'est
+téléchargé que s'il a changé. Aucune divergence n'est jamais tranchée à votre
+place, et la version écartée est toujours conservée dans `backups/`.
 
 L'application se **verrouille** d'elle-même après un temps d'inactivité réglable
-(20 minutes par défaut) : rien n'est lisible sans ressaisir la phrase.
+(20 minutes par défaut) : rien n'est lisible sans la phrase.
+
+Pour ne pas la retaper à chaque fois, **Réglages → Sécurité** la scelle avec
+Face ID, Touch ID ou Windows Hello : l'appareil dérive un secret stable
+(extension WebAuthn *PRF*) qu'il ne livre qu'après vous avoir vérifié, et qui
+n'est jamais conservé ni transmis. La phrase reste toujours acceptée, et demeure
+le seul recours sur un nouvel appareil. Chaque champ secret — phrase comme jeton
+d'accès — s'affiche d'une pression sur l'œil.
 
 ## Démarrage type
 
