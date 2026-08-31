@@ -214,7 +214,50 @@ const Store = {
     Store.state = null;
     Store.mode = 'boot';
     Depot.configure(null);
+    // Verrouiller est un geste : il retire aussi la clé de session conservée
+    // par « rester déverrouillé » — un verrou qui se rouvre seul n'en est pas un.
+    Store._del('cleSession');
     if (Store.onLock) Store.onLock();
+  },
+
+  /* ---------- Rester déverrouillé sur cet appareil ----------
+     La clé AES — non extractible — est conservée dans IndexedDB : le
+     navigateur peut la ranger et l'utiliser, jamais en lire les octets.
+     L'application s'ouvre alors sans phrase ni biométrie ; la protection
+     devient celle de l'appareil (son code, sa session). C'est un choix par
+     appareil, jamais un défaut, et le verrouillage manuel le révoque. */
+
+  async resterDeverrouille(actif) {
+    if (actif) {
+      if (!Store._cle) throw new Error('Le coffre doit être ouvert.');
+      await Store._put('cleSession', { cle: Store._cle, sel: Store._sel });
+    } else {
+      await Store._del('cleSession');
+    }
+  },
+
+  async estResterDeverrouille() { return !!(await Store._get('cleSession')); },
+
+  // Ouverture sans phrase, si la clé de session est là et ouvre encore le
+  // coffre (une phrase changée ailleurs la rend caduque — on retombe alors
+  // sur l'écran de déverrouillage, sans rien casser).
+  async deverrouillerAuto() {
+    const sess = await Store._get('cleSession');
+    if (!sess || !sess.cle) return false;
+    const texte = await Store._get('coffre');
+    if (!texte) return false;
+    let donnees;
+    try { donnees = await Coffre.ouvrirAvecCle(sess.cle, texte); }
+    catch { await Store._del('cleSession'); return false; }
+    Store._cle = sess.cle; Store._sel = sess.sel;
+    Store.state = Store.migrate(donnees);
+    Store.state.snapshotsDirty = true;
+    Store._shaDistant = (await Store._get('sha')) || null;
+    Store._sigEnvoyee = Store._sigBase = (await Store._get('sigEnvoyee')) || null;
+    Store._baseTexte = (await Store._get('base')) || null;
+    await Store._brancherDepot();
+    await Store._majIndices();
+    return true;
   },
 
   async changerPhrase(ancienne, nouvelle) {
@@ -237,8 +280,9 @@ const Store = {
     await Store._ecrireLocal();
     if (jeton) await Store.enregistrerJeton(jeton);
     await Store._majIndices();
-    // Le déverrouillage biométrique ouvrait sur l'ancienne phrase : il doit
-    // suivre, ou disparaître — jamais rester faux.
+    // Le déverrouillage biométrique et la clé de session ouvraient sur
+    // l'ancienne phrase : ils suivent, ou disparaissent — jamais ne restent faux.
+    if (await Store.estResterDeverrouille()) await Store.resterDeverrouille(true);
     if (typeof Bio !== 'undefined') await Bio.resceller(nouvelle);
     // Le dépôt doit recevoir la nouvelle enveloppe tout de suite : sinon les
     // autres appareils continueraient d'y lire l'ancien sel.
@@ -970,7 +1014,7 @@ const Store = {
   // Tout ce qui est scellé avec l'ancienne clé — coffre, jeton, sauvegardes —
   // deviendrait illisible sous une nouvelle : on ne le garde pas.
   async _reinitialiserAppareil() {
-    for (const k of ['coffre', 'jeton', 'sha', 'sigEnvoyee', 'base', 'backups', 'indices', 'bio']) await Store._del(k);
+    for (const k of ['coffre', 'jeton', 'sha', 'sigEnvoyee', 'base', 'backups', 'indices', 'bio', 'cleSession']) await Store._del(k);
     Store._jeton = null; Store._derniereEnveloppe = null;
     Store._enAttente = false; Store.conflit = false;
   },

@@ -59,12 +59,23 @@ const UI = {
 
   /* ---------- Modales ---------- */
 
+  _modales: [],
+
   modal(html, { onClose } = {}) {
     const back = document.createElement('div');
     back.className = 'modal-back';
     back.innerHTML = `<div class="modal">${html}</div>`;
     document.body.appendChild(back);
-    const close = () => { back.remove(); if (onClose) onClose(); };
+    const entree = {};
+    UI._modales.push(entree);
+    if (typeof App !== 'undefined' && App.garder) App.garder();
+    const close = () => {
+      const i = UI._modales.indexOf(entree);
+      if (i >= 0) UI._modales.splice(i, 1);
+      back.remove();
+      if (onClose) onClose();
+    };
+    entree.close = close;
     back.addEventListener('click', e => { if (e.target === back) close(); });
     document.addEventListener('keydown', function esc(e) {
       if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
@@ -396,8 +407,8 @@ UI.fiches = function () {
     const tete = document.createElement('button');
     tete.type = 'button';
     tete.className = 'fiche-tete';
-    tete.innerHTML = `<span class="fiche-titre">${U.escapeHtml(titre)}</span>
-      <span class="fiche-resume"></span><span class="fiche-chev">›</span>`;
+    tete.innerHTML = `<span class="fiche-ligne"><span class="fiche-titre">${U.escapeHtml(titre)}</span>
+      <span class="fiche-resume"></span><span class="fiche-chev">›</span></span>`;
     const barre = document.createElement('div');
     barre.className = 'fiche-barre';
     barre.innerHTML = `<button type="button" class="fiche-retour">‹</button>
@@ -406,6 +417,7 @@ UI.fiches = function () {
     card.prepend(tete);
 
     const ouvrir = () => {
+      if (typeof App !== 'undefined' && App.garder) App.garder();
       document.querySelectorAll('.card.fiche.ouverte').forEach(c => c.classList.remove('ouverte'));
       card.classList.add('ouverte');
       document.body.classList.add('fiche-ouverte');
@@ -428,15 +440,38 @@ UI.fiches = function () {
   });
 };
 
-// Le chiffre qui résume la fiche sans l'ouvrir : le premier total qu'elle
-// affiche, ou à défaut le nombre de lignes de son tableau.
+// Ce que la tuile montre sans qu'on l'ouvre : son chiffre fort, et surtout
+// son graphique en miniature — une application se regarde avant de se lire.
 UI._ficheResume = function (card) {
   const zone = card.querySelector('.fiche-tete .fiche-resume');
   if (!zone) return;
   const val = card.querySelector('.stat-val');
-  if (val && val.textContent.trim()) { zone.textContent = val.textContent.trim().slice(0, 18); return; }
-  const lignes = card.querySelectorAll('table tr').length;
-  zone.textContent = lignes > 1 ? `${lignes - 1} ligne${lignes > 2 ? 's' : ''}` : '';
+  if (val && val.textContent.trim()) zone.textContent = val.textContent.trim().slice(0, 18);
+  else {
+    const lignes = card.querySelectorAll('table tr').length;
+    zone.textContent = lignes > 1 ? `${lignes - 1} ligne${lignes > 2 ? 's' : ''}` : '';
+  }
+  // Aperçu : le premier graphique de la carte, cloné en vignette. Inerte
+  // (aucun événement), régénéré à chaque re-rendu pour suivre la donnée.
+  const svg = card.querySelector(':scope > svg, :scope > div svg');
+  let apercu = card.querySelector('.fiche-tete .fiche-apercu');
+  if (svg && svg.getAttribute('viewBox')) {
+    if (!apercu) {
+      apercu = document.createElement('div');
+      apercu.className = 'fiche-apercu';
+      card.querySelector('.fiche-tete').appendChild(apercu);
+    }
+    const clone = svg.cloneNode(true);
+    clone.removeAttribute('id');
+    clone.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+    clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    apercu.innerHTML = '';
+    apercu.appendChild(clone);
+    card.classList.add('avec-apercu');
+  } else if (apercu) {
+    apercu.remove();
+    card.classList.remove('avec-apercu');
+  }
 };
 
 // Échap ferme la fiche ouverte, comme une modale.
@@ -445,3 +480,23 @@ document.addEventListener('keydown', (e) => {
   const ouverte = document.querySelector('.card.fiche.ouverte');
   if (ouverte && ouverte._fermerFiche && !document.querySelector('.modal-back')) ouverte._fermerFiche();
 });
+
+// Le geste retour du téléphone ferme UNE chose, dans l'ordre où l'œil les
+// empile : la modale au-dessus, puis la fiche ouverte, puis l'écran — retour
+// au tableau de bord. → ce qui a été fermé, ou null s'il n'y avait rien.
+UI.retourArriere = function () {
+  if (UI._modales.length) {
+    UI._modales[UI._modales.length - 1].close();
+    return 'modale';
+  }
+  const fiche = document.querySelector('.card.fiche.ouverte');
+  if (fiche && fiche._fermerFiche) {
+    fiche._fermerFiche();
+    return 'fiche';
+  }
+  if (typeof App !== 'undefined' && Store.state && App.current !== 'patrimoine') {
+    App.go('patrimoine');
+    return 'ecran';
+  }
+  return null;
+};

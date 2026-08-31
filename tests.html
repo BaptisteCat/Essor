@@ -561,6 +561,73 @@ try {
       typeof Store._put === 'function' && Depot.cfg === memoire.cfg);
   }
 
+  /* ---- Rester déverrouillé : la session survit à la fermeture ---- */
+  {
+    const local = new Map();
+    const memoire = { get: Store._get, put: Store._put, del: Store._del,
+      cle: Store._cle, sel: Store._sel, state: Store.state, onLock: Store.onLock };
+    Store._get = async (k) => local.get(k);
+    Store._put = async (k, v) => { local.set(k, v); };
+    Store._del = async (k) => { local.delete(k); };
+    Store.onLock = null;
+
+    const d = await Coffre.deriver('phrase de test suffisamment longue', null);
+    Store._cle = d.cle; Store._sel = d.sel;
+    Store.state = Store.migrate({ schema: 1, goals: [{ id: 'g', name: 'objectif', target: 1 }] });
+    await Store._ecrireLocal();
+    await Store.resterDeverrouille(true);
+    check('Session — le choix « rester déverrouillé » range la clé, jamais la phrase',
+      !!local.get('cleSession') && local.get('cleSession').cle instanceof CryptoKey &&
+      !JSON.stringify([...local.keys()]).includes('phrase'));
+
+    // Ce que fait une fermeture : tout ce qui vit en mémoire disparaît.
+    Store._cle = null; Store.state = null;
+    check("Session — à la réouverture, le coffre s'ouvre sans phrase ni empreinte",
+      await (async () => (await Store.deverrouillerAuto()) &&
+        Store.state.goals[0].name === 'objectif')());
+
+    // Verrouiller est un geste : il révoque le choix.
+    Store.verrouiller();
+    await new Promise(r => setTimeout(r, 50));
+    check('Session — verrouiller à la main retire la clé de session',
+      !local.get('cleSession') && (await Store.deverrouillerAuto()) === false);
+
+    // Une phrase changée ailleurs rend la clé caduque, proprement.
+    Store._cle = d.cle; Store._sel = d.sel;
+    Store.state = Store.migrate({ schema: 1 });
+    await Store.resterDeverrouille(true);
+    const autre = await Coffre.deriver('une nouvelle phrase de passe', null);
+    local.set('coffre', await Coffre.sceller(autre.cle, autre.sel, { schema: 1 }));
+    Store._cle = null; Store.state = null;
+    check('Session — une phrase changée ailleurs invalide la clé sans rien casser',
+      (await Store.deverrouillerAuto()) === false && !local.get('cleSession'));
+
+    Store._get = memoire.get; Store._put = memoire.put; Store._del = memoire.del;
+    Store._cle = memoire.cle; Store._sel = memoire.sel; Store.state = memoire.state;
+    Store.onLock = memoire.onLock;
+  }
+
+  /* ---- Geste retour : fermer, jamais quitter ---- */
+  {
+    // Une modale ouverte se ferme en premier.
+    const m = UI.modal('<p>test retour</p>');
+    check('Retour — la modale au-dessus se ferme en premier',
+      UI.retourArriere() === 'modale' && !document.querySelector('.modal-back'));
+
+    // Puis la fiche ouverte.
+    const carte = document.createElement('div');
+    carte.className = 'card fiche ouverte';
+    let fermee = false;
+    carte._fermerFiche = () => { fermee = true; carte.classList.remove('ouverte'); };
+    document.body.appendChild(carte);
+    check('Retour — puis la fiche ouverte', UI.retourArriere() === 'fiche' && fermee);
+    carte.remove();
+
+    // Enfin, plus rien : le retour peut quitter.
+    check('Retour — à la racine, plus rien à fermer : le geste suivant quitte',
+      UI.retourArriere() === null || UI.retourArriere() === 'ecran');
+  }
+
   /* ---- Déverrouillage biométrique et champs secrets ---- */
   {
     const local = new Map();

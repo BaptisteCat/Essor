@@ -33,8 +33,16 @@ const App = {
     try { status = await Store.init(); }
     catch (e) { App.bootErreur(e.message); return; }
 
-    if (status === 'verrouille') App.ecranDeverrouillage();
-    else App.ecranPremierUsage();
+    if (status === 'verrouille') {
+      // « Rester déverrouillé » : la clé de session ouvre le coffre sans rien
+      // demander — l'application s'ouvre comme n'importe quelle application.
+      if (await Store.deverrouillerAuto()) {
+        App.demarrer();
+        App.rattraperDepot();
+        return;
+      }
+      App.ecranDeverrouillage();
+    } else App.ecranPremierUsage();
   },
 
   bootErreur(msg) {
@@ -48,6 +56,7 @@ const App = {
   /* ---------- Écran de déverrouillage ---------- */
 
   async ecranDeverrouillage(message) {
+    if (message) App._bioAutoFaite = true;   // verrou volontaire : pas d'invite automatique
     clearInterval(App._sondage);          // plus rien ne parle au dépôt une fois verrouillé
     document.getElementById('app').style.display = 'none';
     const b = document.getElementById('boot');
@@ -118,6 +127,16 @@ const App = {
       App.rattraperDepot();
     });
     document.getElementById('btn-bio').onclick = (e) => ouvrir(e.currentTarget);
+    // L'invite se lance d'elle-même à l'ouverture : sur Android, l'empreinte
+    // apparaît sans toucher au bouton. Une seule tentative — refusée ou
+    // impossible (Safari exige un geste), le bouton reste là.
+    if (!App._bioAutoFaite) {
+      App._bioAutoFaite = true;
+      setTimeout(() => {
+        const b = document.getElementById('btn-bio');
+        if (b && !Store.state) ouvrir(b);
+      }, 350);
+    }
   },
 
   /* ---------- Installation sur l'appareil ---------- */
@@ -316,6 +335,7 @@ const App = {
     App.render();
     UI.renderSaveStatus(Store.saveStatus, Store.mode);
     App.armerVerrouAuto();
+    App.armerRetour();
     // Le navigateur se réserve d'effacer les données d'un site « de passage »
     // quand la place manque : on demande le statut durable dès l'ouverture.
     // Les cours crypto se rafraîchissent d'eux-mêmes, au plus une fois par
@@ -427,6 +447,31 @@ const App = {
     reset();
   },
 
+  /* ---------- Bouton retour du téléphone ----------
+     Sans cela, le geste retour d'Android quittait l'application au lieu de
+     fermer ce qui est ouvert. Une entrée de garde est posée dans l'historique ;
+     chaque retour la consomme, ferme UNE chose — modale, fiche, puis écran —
+     et la repose. À la racine, plus rien à fermer : le retour suivant quitte,
+     comme dans n'importe quelle application. */
+
+  armerRetour() {
+    if (App._retourArme) return;
+    App._retourArme = true;
+    history.replaceState({ essor: 'base' }, '');
+    history.pushState({ essor: 'garde' }, '');
+    window.addEventListener('popstate', () => {
+      if (UI.retourArriere()) history.pushState({ essor: 'garde' }, '');
+      // sinon : la garde est consommée, le retour suivant quitte vraiment.
+    });
+  },
+
+  // La garde se repose dès qu'on rouvre quelque chose après la racine.
+  garder() {
+    if (App._retourArme && (!history.state || history.state.essor !== 'garde')) {
+      history.pushState({ essor: 'garde' }, '');
+    }
+  },
+
   /* ---------- Navigation ---------- */
 
   renderNav() {
@@ -450,6 +495,7 @@ const App = {
   },
 
   go(screen) {
+    App.garder();
     // Changer d'onglet referme la fiche ouverte : chaque écran repart de sa liste.
     UI._ficheOuverte = null;
     document.body.classList.remove('fiche-ouverte');

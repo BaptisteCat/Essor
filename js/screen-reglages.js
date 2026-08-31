@@ -272,6 +272,7 @@ const ScreenReglages = {
     const holder = document.getElementById('rg-securite');
     const bioDispo = await Bio.disponible();
     const bioActive = await Bio.configuree();
+    const resteOuvert = await Store.estResterDeverrouille();
     // Un rendu qui attend peut revenir après un changement d'écran : ses
     // éléments n'existent plus, et rien ne doit être branché sur du vide.
     if (!document.body.contains(holder)) return;
@@ -289,6 +290,13 @@ const ScreenReglages = {
         <div class="field"><button id="rg-phrase">Changer la phrase de passe…</button></div>
       </div>
       <div id="rg-phrase-form"></div>
+
+      <h3 style="margin-top:16px">Rester déverrouillé sur cet appareil</h3>
+      <p class="small"><label><input type="checkbox" id="rg-reste" style="width:auto" ${resteOuvert ? 'checked' : ''}>
+      L'application s'ouvre directement, sans phrase ni empreinte.</label></p>
+      <p class="small">${resteOuvert
+        ? "La clé de déchiffrement est confiée à ce navigateur : la protection est celle de l'appareil — son code, sa session. « Verrouiller maintenant » la retire."
+        : 'À réserver à un appareil qui a son propre verrou (code, empreinte). Le choix vaut pour cet appareil seulement.'}</p>
 
       <h3 style="margin-top:16px">Déverrouillage sans saisie</h3>
       ${!bioDispo
@@ -312,6 +320,19 @@ const ScreenReglages = {
       UI.toast(s.verrouillageMin ? `Verrouillage après ${s.verrouillageMin} minutes.` : 'Verrouillage automatique désactivé.');
     };
     document.getElementById('rg-verrou-now').onclick = async () => { await Store.save(); Store.verrouiller(); };
+    document.getElementById('rg-reste').onchange = async (e) => {
+      await Store.resterDeverrouille(e.target.checked);
+      if (e.target.checked && s.verrouillageMin) {
+        // Rester ouvert et se verrouiller après 20 minutes se contrediraient.
+        s.verrouillageMin = 0;
+        Store.markDirty();
+        App.armerVerrouAuto();
+      }
+      ScreenReglages.renderSecurite();
+      UI.toast(e.target.checked
+        ? "Essor s'ouvrira directement sur cet appareil. « Verrouiller maintenant » révoque ce choix."
+        : "La phrase (ou l'empreinte) sera demandée à chaque ouverture.");
+    };
     document.getElementById('rg-phrase').onclick = () => {
       document.getElementById('rg-phrase-form').innerHTML = `
         <div class="notice warn">La nouvelle phrase remplace l'ancienne <b>partout</b> : sur cet appareil
