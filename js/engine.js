@@ -19,8 +19,14 @@ const ACCOUNT_TYPES = {
              cashClasse: 'Espèces sur comptes-titres' },
   av:      { label: 'Assurance-vie',  classe: 'Actions', invest: true, positions: true,
              cashClasse: 'Fonds euros' },
+  // Un portefeuille crypto ne se pense pas en « positions » et en ISIN, mais en
+  // ACTIFS et en paires (BTC/EUR). Le vocabulaire de l'écran suit celui du
+  // compte : c'est la même mécanique — quantité détenue, prix de revient,
+  // valorisation au cours — sous les mots justes.
   crypto:  { label: 'Crypto',         classe: 'Crypto', invest: true, positions: true,
-             cashClasse: 'Espèces sur compte crypto' },
+             cashClasse: 'Espèces sur compte crypto',
+             motPositions: 'Actifs', motPosition: 'Actif', motSupport: 'Paire',
+             exempleSupport: 'BTC/EUR', motPru: "Prix moyen d'achat", decimales: 8 },
   immo:    { label: 'Immobilier',     classe: 'Immobilier', invest: false, positions: false },
   autre:   { label: 'Autre',          classe: 'Autre', invest: false, positions: false },
 };

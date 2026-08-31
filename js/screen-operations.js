@@ -124,7 +124,7 @@ const ScreenOperations = {
             : `solde au ${U.fmtDate(balDate)}`}</div></td>
         <td class="right">
           <button data-x="certify">Certifier un solde</button>
-          ${t.positions ? '<button data-x="pos">Positions</button>' : ''}
+          ${t.positions ? `<button data-x="pos">${t.motPositions || 'Positions'}</button>` : ''}
         </td></tr>`;
     }).join('');
     document.getElementById('op-accounts').innerHTML = accs.length
@@ -251,54 +251,149 @@ const ScreenOperations = {
     };
   },
 
-  /* ---------- Positions (EX-11, EX-12) ---------- */
+  // Identifiants CoinGecko des actifs les plus courants : sans eux, « Mettre à
+  // jour les cours crypto » ne saurait pas quoi demander, et il faudrait aller
+  // les saisir un par un dans les Réglages.
+  CRYPTO_CONNUES: {
+    BTC: 'bitcoin', XBT: 'bitcoin', ETH: 'ethereum', SOL: 'solana', ADA: 'cardano',
+    DOT: 'polkadot', AVAX: 'avalanche-2', MATIC: 'matic-network', POL: 'polygon-ecosystem-token',
+    LINK: 'chainlink', XRP: 'ripple', LTC: 'litecoin', BCH: 'bitcoin-cash', DOGE: 'dogecoin',
+    ATOM: 'cosmos', ALGO: 'algorand', XTZ: 'tezos', NEAR: 'near', ARB: 'arbitrum',
+    OP: 'optimism', UNI: 'uniswap', AAVE: 'aave', TRX: 'tron', BNB: 'binancecoin',
+    USDT: 'tether', USDC: 'usd-coin', DAI: 'dai',
+  },
+
+  // « BTC/EUR », « BTC-EUR », « BTCEUR » ou simplement « BTC » → {actif, contre}.
+  lirePaire(saisie) {
+    const t = String(saisie || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!t) return null;
+    let m = t.match(/^([A-Z0-9]{2,10})[/\-:]([A-Z]{3,5})$/);
+    if (m) return { actif: m[1], contre: m[2] };
+    m = t.match(/^([A-Z0-9]{2,10})(EUR|USD|USDT|USDC)$/);
+    if (m) return { actif: m[1], contre: m[2] };
+    return { actif: t, contre: 'EUR' };
+  },
+
+  /* ---------- Positions et actifs (EX-11, EX-12) ---------- */
 
   positionsModal(accountId) {
     const a = Engine.account(accountId);
+    const t = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES.autre;
+    // Vocabulaire du compte : « Positions / Support / PRU » pour un
+    // compte-titres, « Actifs / Paire / Prix moyen d'achat » pour la crypto.
+    const MOT = {
+      titre: t.motPositions || 'Positions',
+      support: t.motSupport || 'Support',
+      exemple: t.exempleSupport || 'IE00B4L5Y983',
+      pru: t.motPru || 'PRU',
+      dec: t.decimales || 3,
+    };
+    const crypto = a.type === 'crypto';
     const today = U.today();
     const v = Engine.positionsValue(accountId, today);
+    const qte = (q) => q.toLocaleString('fr-FR', { maximumFractionDigits: MOT.dec });
+    // Le pourcentage porte la même couleur que le montant : vert ou cuivre,
+    // jamais un chiffre nu qu'il faudrait interpréter.
+    const pct = (gain, investi) => `<span class="${gain > 0 ? 'up' : gain < 0 ? 'down' : 'neutral-c'} num">` +
+      `${gain >= 0 ? '+' : ''}${(gain / investi * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}&nbsp;%</span>`;
+
+    let totalInvesti = 0, totalValeur = 0, tousPru = true;
     const rows = v.detail.map(d => {
       const pru = Store.state.pru[d.symbol];
-      const gain = pru ? d.value - U.roundCents(d.qty * pru) : null;
-      return `<tr><td>${U.escapeHtml(d.symbol)}</td>
-        <td class="num">${d.qty.toLocaleString('fr-FR')}</td>
-        <td class="num">${d.price != null ? U.fmtPrice(d.price) : '—'}${d.approx ? ' <span class="badge cuivre" title="cours daté du ' + U.fmtDate(d.priceDate) + '">approx.</span>' : ''}</td>
-        <td class="num">${pru ? U.fmtPrice(pru) : '<span class="muted">PRU ?</span>'}</td>
-        <td class="num">${gain != null ? UI.varia(gain) : '—'}</td>
+      const investi = pru ? U.roundCents(d.qty * pru) : null;
+      const gain = investi != null ? d.value - investi : null;
+      if (investi != null) totalInvesti += investi; else tousPru = false;
+      totalValeur += d.value;
+      const nom = (Store.state.priceMeta[d.symbol] || {}).name;
+      return `<tr>
+        <td>${U.escapeHtml(d.symbol)}${crypto ? '<span class="small">/EUR</span>' : ''}
+          ${nom ? `<div class="small">${U.escapeHtml(nom)}</div>` : ''}
+          <div class="small seul-mobile" title="${U.escapeHtml(MOT.pru)}">payé ${pru ? U.fmtPrice(pru) : '—'}</div></td>
+        <td class="num">${qte(d.qty)}</td>
+        <td class="num col-large">${d.price != null ? U.fmtPrice(d.price) : '—'}${d.approx ? ' <span class="badge cuivre" title="cours daté du ' + U.fmtDate(d.priceDate) + '">approx.</span>' : ''}</td>
+        <td class="num col-large">${pru ? U.fmtPrice(pru) : '<span class="muted">non renseigné</span>'}</td>
+        <td class="num col-large">${investi != null ? U.fmtEUR(investi) : '—'}</td>
+        <td class="num">${gain != null ? UI.varia(gain) : '—'}
+          ${gain != null && investi ? `<div class="small seul-mobile">${pct(gain, investi)}</div>` : ''}</td>
+        <td class="num col-large">${gain != null && investi ? pct(gain, investi) : '—'}</td>
         <td class="num stat-val">${U.fmtEUR(d.value)}</td></tr>`;
     }).join('');
+
+    const gainTotal = tousPru && totalInvesti ? totalValeur - totalInvesti : null;
     const m = UI.modal(`
-      <h2>Positions — ${U.escapeHtml(a.name)}</h2>
-      <p class="small">Vous saisissez ce que vous possédez (quantités), pas ce que ça vaut : la valeur
-      découle des cours (Réglages → Cours). Les supports capitalisants réinvestissent leurs revenus
-      dans le cours — les rendements affichés sont des rendements totaux, ne comptez pas
-      de dividendes en plus.</p>
-      ${v.detail.length ? `<table><tr><th>Support</th><th class="num">Quantité</th><th class="num">Cours</th>
-        <th class="num">PRU</th><th class="num">± value latente</th><th class="num">Valeur</th></tr>${rows}</table>` :
-        '<div class="empty">Aucune position.</div>'}
-      <h3 style="margin-top:14px">Déclarer un mouvement de titres</h3>
+      <h2>${MOT.titre} — ${U.escapeHtml(a.name)}</h2>
+      <p class="small">Vous saisissez ce que vous détenez (quantités) et ce que vous l'avez payé
+      (${MOT.pru.toLowerCase()}) : la valeur du jour découle des cours, et la plus ou moins-value
+      s'en déduit. ${crypto
+        ? 'Les cours se mettent à jour depuis CoinGecko (Réglages → Cours) ; seuls les identifiants des actifs sortent de la machine.'
+        : 'Les supports capitalisants réinvestissent leurs revenus dans le cours — ne comptez pas de dividendes en plus.'}</p>
+      ${v.detail.length ? `<div style="overflow-x:auto"><table>
+        <tr><th>${MOT.support}</th><th class="num">Quantité</th><th class="num col-large">Cours</th>
+          <th class="num col-large">${MOT.pru}</th><th class="num col-large">Investi</th>
+          <th class="num">± value</th><th class="num col-large">%</th><th class="num">Valeur</th></tr>
+        ${rows}
+        ${gainTotal != null ? `<tr class="section"><td>Total</td><td></td><td class="col-large"></td>
+          <td class="col-large"></td><td class="num col-large">${U.fmtEUR(totalInvesti)}</td>
+          <td class="num">${UI.varia(gainTotal)}
+            <div class="small seul-mobile">${pct(gainTotal, totalInvesti)}</div></td>
+          <td class="num col-large">${pct(gainTotal, totalInvesti)}</td>
+          <td class="num stat-val">${U.fmtEUR(totalValeur)}</td></tr>` : ''}
+      </table></div>` : `<div class="empty">Aucun ${crypto ? 'actif' : 'support'} déclaré.</div>`}
+      ${!tousPru && v.detail.length ? `<div class="notice">Sans ${MOT.pru.toLowerCase()}, la plus ou
+        moins-value ne peut pas être calculée — c'est la seule saisie qu'Essor ne sait pas déduire
+        de vos relevés.</div>` : ''}
+
+      <h3 style="margin-top:14px">${crypto ? 'Déclarer un achat ou une vente' : 'Déclarer un mouvement de titres'}</h3>
       <div class="row">
-        <div class="field"><label>Support (ISIN/ticker)</label><input id="ps-sym" placeholder="IE00B4L5Y983" size="16"></div>
-        <div class="field"><label>Quantité (± pour vente)</label><input id="ps-qty" class="amount" size="8" placeholder="10"></div>
+        <div class="field"><label>${MOT.support}</label>
+          <input id="ps-sym" placeholder="${MOT.exemple}" size="14" autocapitalize="characters" spellcheck="false"></div>
+        <div class="field"><label>Quantité <span class="small">(négative pour une vente)</span></label>
+          <input id="ps-qty" class="amount" size="10" placeholder="${crypto ? '0,05' : '10'}"></div>
         <div class="field"><label>Date</label><input type="date" id="ps-date" value="${today}"></div>
-        <div class="field"><label>Cours unitaire</label>${UI.amountInput('ps-price', null, '87,42')}</div>
-        <div class="field"><label>PRU (optionnel)</label>${UI.amountInput('ps-pru', null)}</div>
+        <div class="field"><label>Cours unitaire</label>${UI.amountInput('ps-price', null, crypto ? '58 400,00' : '87,42')}</div>
+        <div class="field"><label>${MOT.pru}</label>${UI.amountInput('ps-pru', null)}</div>
         <button class="primary" id="ps-add">Ajouter</button>
       </div>
-      <div class="hint">Les achats importés d'un relevé de courtier (colonnes ISIN + quantité) créent ces mouvements automatiquement.</div>
+      <div class="hint">${crypto
+        ? "La paire s'écrit BTC/EUR. Laissez le prix moyen d'achat vide et le cours saisi en tient lieu — commode pour un premier achat."
+        : "Les achats importés d'un relevé de courtier (colonnes ISIN + quantité) créent ces mouvements automatiquement."}</div>
+      <div class="erreur" id="ps-err"></div>
       <div class="actions"><button class="ghost" data-x="cancel">Fermer</button></div>`);
+
     m.el.querySelector('[data-x="cancel"]').onclick = m.close;
     m.el.querySelector('#ps-add').onclick = () => {
-      const sym = m.el.querySelector('#ps-sym').value.trim().toUpperCase();
+      const err = m.el.querySelector('#ps-err');
+      err.textContent = '';
+      const saisie = m.el.querySelector('#ps-sym').value;
       const qty = Number(String(m.el.querySelector('#ps-qty').value).replace(',', '.'));
       const date = m.el.querySelector('#ps-date').value;
       const price = UI.readAmount(m.el.querySelector('#ps-price'));
-      const pru = UI.readAmount(m.el.querySelector('#ps-pru'));
-      if (!sym || !qty || !date) { UI.error('Support, quantité ou date manquant.', 'Renseignez au moins ces trois champs.'); return; }
+      let pru = UI.readAmount(m.el.querySelector('#ps-pru'));
+      if (!saisie.trim() || !qty || Number.isNaN(qty) || !date) {
+        err.textContent = `${MOT.support}, quantité ou date manquant.`;
+        return;
+      }
+      let sym = saisie.trim().toUpperCase();
+      if (crypto) {
+        const paire = ScreenOperations.lirePaire(saisie);
+        sym = paire.actif;
+        // Tout est valorisé en euros : une paire cotée ailleurs fausserait le
+        // patrimoine sans prévenir.
+        if (paire.contre !== 'EUR') {
+          err.textContent = `Essor valorise en euros : saisissez ${sym}/EUR, et le cours en euros.`;
+          return;
+        }
+        const meta = Store.state.priceMeta[sym] || {};
+        const cg = ScreenOperations.CRYPTO_CONNUES[sym];
+        if (cg && !meta.coingecko) Store.state.priceMeta[sym] = { ...meta, coingecko: cg, currency: 'EUR' };
+        // Premier achat sans prix de revient : le cours saisi en tient lieu.
+        if (!pru && price && qty > 0 && !Store.state.pru[sym]) pru = price;
+      }
       Store.state.trades.push({ id: U.uid(), accountId, symbol: sym, date, qtyDelta: qty, priceCents: price || null });
       if (price) Engine.setPrice(sym, date, price);
       if (pru) Store.state.pru[sym] = pru;
       Engine.invalidate();
+      Store.markDirty();
       m.close();
       ScreenOperations.positionsModal(accountId);
     };

@@ -625,6 +625,53 @@ try {
     bac.remove();
   }
 
+  /* ---- Portefeuille crypto : des actifs, des paires, une plus-value ---- */
+  {
+    check("Crypto — le compte parle d'actifs et de paires, pas de positions et d'ISIN",
+      ACCOUNT_TYPES.crypto.motPositions === 'Actifs' &&
+      ACCOUNT_TYPES.crypto.motSupport === 'Paire' &&
+      ACCOUNT_TYPES.crypto.exempleSupport === 'BTC/EUR' &&
+      ACCOUNT_TYPES.titres.motPositions === undefined,
+      JSON.stringify([ACCOUNT_TYPES.crypto.motPositions, ACCOUNT_TYPES.crypto.motSupport]));
+
+    const p = (x) => { const r = ScreenOperations.lirePaire(x); return r.actif + '/' + r.contre; };
+    check('Crypto — la paire se lit sous toutes ses écritures courantes',
+      p('BTC/EUR') === 'BTC/EUR' && p('btc-eur') === 'BTC/EUR' && p('BTCEUR') === 'BTC/EUR' &&
+      p(' eth / eur ') === 'ETH/EUR' && p('SOL') === 'SOL/EUR',
+      [p('BTC/EUR'), p('btc-eur'), p('BTCEUR'), p('SOL')].join(' · '));
+    check("Crypto — une paire cotée ailleurs qu'en euros est reconnue comme telle",
+      p('SOL/USDT') === 'SOL/USDT' && p('ETH/USD') === 'ETH/USD');
+    check('Crypto — les actifs courants portent leur identifiant CoinGecko',
+      ScreenOperations.CRYPTO_CONNUES.BTC === 'bitcoin' &&
+      ScreenOperations.CRYPTO_CONNUES.ETH === 'ethereum' &&
+      ScreenOperations.CRYPTO_CONNUES.SOL === 'solana');
+
+    // La plus-value se déduit du prix moyen d'achat et du cours du jour.
+    const S = fresh();
+    S.accounts.push({ id: 'cr', name: 'Crypto', type: 'crypto', order: 0 });
+    S.certifications.push({ id: 'c', accountId: 'cr', date: '2026-01-01', balance: 0 });
+    S.trades.push({ id: 't1', accountId: 'cr', symbol: 'BTC', date: '2026-02-01', qtyDelta: 0.05, priceCents: 4000000 });
+    S.trades.push({ id: 't2', accountId: 'cr', symbol: 'BTC', date: '2026-05-01', qtyDelta: 0.03, priceCents: 6000000 });
+    S.pru.BTC = 4750000;                                   // 47 500 € payés en moyenne
+    Engine.setPrice('BTC', '2026-08-31', 5840000);         // 58 400 € au jour dit
+    Engine.invalidate();
+    const v = Engine.positionsValue('cr', '2026-08-31');
+    const d = v.detail.find(x => x.symbol === 'BTC');
+    const investi = U.roundCents(d.qty * S.pru.BTC);
+    check('Crypto — quantité cumulée, valeur au cours du jour, et plus-value au centime',
+      Math.abs(d.qty - 0.08) < 1e-9 && d.value === 467200 &&
+      investi === 380000 && d.value - investi === 87200,
+      `qté ${d.qty}, valeur ${d.value}, investi ${investi}`);
+
+    // Une vente réduit la quantité sans toucher au prix moyen d'achat.
+    S.trades.push({ id: 't3', accountId: 'cr', symbol: 'BTC', date: '2026-06-01', qtyDelta: -0.03, priceCents: 5500000 });
+    Engine.invalidate();
+    const apres = Engine.positionsValue('cr', '2026-08-31').detail.find(x => x.symbol === 'BTC');
+    check("Crypto — une vente diminue la quantité, le prix moyen d'achat ne bouge pas",
+      Math.abs(apres.qty - 0.05) < 1e-9 && S.pru.BTC === 4750000,
+      `qté ${apres.qty}`);
+  }
+
   /* ---- Relevés bancaires : ce qui faussait le solde reconstruit ---- */
   {
     // 1. Deux colonnes de date. La date de VALEUR est une date d'intérêts :
