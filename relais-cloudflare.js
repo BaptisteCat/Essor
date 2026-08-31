@@ -40,7 +40,9 @@ async function signerJwt(env) {
     { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
   const enc = (o) => b64url(new TextEncoder().encode(JSON.stringify(o)));
   const exp = now + 3600;
-  const corps = enc({ typ: 'JWT', alg: 'RS256', kid: env.EB_APP_ID }) + '.' +
+  // Un secret collé sous Windows embarque volontiers un retour chariot : un
+  // identifiant « 352e… » n'existe pour personne. On nettoie toujours.
+  const corps = enc({ typ: 'JWT', alg: 'RS256', kid: env.EB_APP_ID.trim() }) + '.' +
     enc({ iss: 'enablebanking.com', aud: 'api.enablebanking.com', iat: now, exp });
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', cle, new TextEncoder().encode(corps));
   jetonCache = { jwt: corps + '.' + b64url(sig), exp };
@@ -77,6 +79,13 @@ export default {
         origines: env.ORIGINES || '(absentes)',
         variables_recues: Object.keys(env).map(k => JSON.stringify(k)),
       };
+      // De quoi comparer l'identifiant à la fiche Enable Banking sans le
+      // publier en entier : son début, sa longueur, ses éventuels parasites.
+      if (env.EB_APP_ID) {
+        const v = env.EB_APP_ID;
+        etat.eb_app_id_apercu = `${v.trim().slice(0, 8)}… — ${v.length} caractères` +
+          (/\s/.test(v) ? ' (CONTIENT espaces ou retours à la ligne)' : '');
+      }
       // Auto-test de bout en bout : signer un vrai jeton et demander à Enable
       // Banking l'état de l'application. Ce que dit leur réponse — « does not
       // exist », « not active », signature refusée — est LE diagnostic ; une
