@@ -5,6 +5,11 @@
    (EX-62), amortissement des crédits (EX-64). L'épargne mensuelle est
    répartie par le MÊME moteur que l'assistant (EX-57).
 
+   Scénario avancé (settings.projAdvanced, opt-in) : paliers d'épargne datés,
+   charges mensuelles à venir, rentrées et dépenses ponctuelles,
+   remboursements anticipés de crédit — le tout rejoué à l'identique par la
+   centrale et le Monte Carlo. Désactivé, la projection est inchangée.
+
    Dispersion (EX-65, EX-66) : le rendement saisi est le taux de croissance
    médian ; autour de lui, les scénarios sont des QUANTILES d'un modèle
    log-normal appliqué à chaque compte volatil — prudent = P25, optimiste =
@@ -43,6 +48,47 @@ const Projection = {
     return S.projSavings != null ? S.projSavings : Alloc.plannedMonthlySavings();
   },
 
+  // Scénario avancé s'il est activé, null sinon — désactivé, la projection
+  // est strictement celle d'origine.
+  advanced() {
+    const a = Store.state.settings.projAdvanced;
+    return a && a.enabled ? a : null;
+  },
+
+  // Échéancier d'un crédit avec remboursements anticipés : capital restant dû
+  // à chaque mois de projection (rem[m]), dernier mois où une mensualité part
+  // encore (endPay — échéance naturelle ou solde anticipé), et montant
+  // réellement prélevé par chaque remboursement (un « solde total » vaut le
+  // capital restant CE mois-là, pas celui d'aujourd'hui). Sans remboursement
+  // anticipé, reproduit Engine.creditRemaining à l'identique.
+  creditSchedule(credit, startMonth, horizonMonths, payoffs = []) {
+    const first = U.monthOf(credit.startDate);
+    const maxN = credit.months ?? 1200;
+    const r = (credit.annualRate || 0) / 12;
+    const lastMonth = U.addMonths(startMonth, horizonMonths);
+    const rem = new Array(horizonMonths + 1).fill(0);
+    const applied = new Map();
+    let rest = credit.principal;
+    let endPay = null;
+    for (let month = first, i = 0; month <= lastMonth; month = U.addMonths(month, 1), i++) {
+      if (i > 0 && i <= maxN && rest > 0) {
+        rest = rest + U.roundCents(rest * r) - credit.monthlyPayment;
+        if (rest < 0) rest = 0;
+      }
+      for (const p of payoffs) {
+        if (p.month === month && rest > 0) {
+          const montant = p.amount != null ? Math.min(p.amount, rest) : rest;
+          applied.set(p.id, montant);
+          rest -= montant;
+        }
+      }
+      if (endPay === null && (rest <= 0 || i >= maxN)) endPay = month;
+      const idx = U.monthDiff(startMonth, month);
+      if (idx >= 0 && idx <= horizonMonths) rem[idx] = rest;
+    }
+    return { rem, endPay, applied };
+  },
+
   // → {months, central, low (P25), high (P75), band {low:P10, high:P90},
   //    real {central, low, high}, firstAlloc, contribs, debts, deflator}
   run(horizonMonths, opts = {}) {
@@ -53,6 +99,26 @@ const Projection = {
     const accounts = Engine.accountsSorted().filter(a => !a.closed);
     const baseCtx = Alloc.buildContext(today);
     let savings = opts.monthlySavings ?? Projection.monthlySavings();
+
+    // Scénario avancé (paliers d'épargne, charges, ponctuels, remboursements
+    // anticipés) : tout est daté au mois. Les échéanciers de crédit sont
+    // recalculés une fois, remboursements compris — la centrale et le Monte
+    // Carlo (qui rejoue contribs et debts) voient le même monde.
+    const adv = Projection.advanced();
+    const steps = adv ? adv.savingsSteps.slice().sort((a, b) => a.month < b.month ? -1 : 1) : [];
+    let stepIdx = 0;
+    const plans = adv ? S.credits.map(c => Projection.creditSchedule(c, startMonth, horizonMonths,
+      (adv.payoffs || []).filter(p => p.creditId === c.id))) : null;
+    const payoffParMois = new Map();
+    if (adv) {
+      S.credits.forEach((c, i) => {
+        for (const p of (adv.payoffs || [])) {
+          if (p.creditId === c.id && plans[i].applied.has(p.id))
+            payoffParMois.set(p.month, (payoffParMois.get(p.month) || 0) + plans[i].applied.get(p.id));
+        }
+      });
+    }
+    const cashAcc = accounts.find(a => a.type === 'courant') || accounts[0];
 
     // Valeurs par compte en centimes flottants internes — l'arrondi ne se
     // fait qu'en sortie, pour une capitalisation exacte (EX-77, crit. 1).
@@ -71,28 +137,52 @@ const Projection = {
       const month = U.addMonths(startMonth, m);
       const contrib = {};
       if (m > 0) {
+        // 0. Scénario avancé : l'épargne du mois se corrige AVANT d'être
+        //    versée — palier daté, charges en plus, mensualités libérées,
+        //    rentrées ponctuelles. Ce qui sort (dépense ponctuelle, épargne
+        //    nette négative, remboursement anticipé) est retiré du compte
+        //    courant, jamais absorbé en silence.
+        let pool = savings;
+        let retrait = 0;
+        if (adv) {
+          while (stepIdx < steps.length && steps[stepIdx].month <= month) savings = pool = steps[stepIdx++].amount;
+          pool -= U.sum((adv.charges || []).filter(c => c.from <= month && (!c.to || month <= c.to)), c => c.amount);
+          if (adv.freedPaymentToSavings) {
+            S.credits.forEach((c, i) => {
+              if (plans[i].endPay && plans[i].endPay < month) pool += c.monthlyPayment;
+            });
+          }
+          for (const e of (adv.events || [])) {
+            if (e.month !== month) continue;
+            if (e.amount > 0) pool += e.amount; else retrait += -e.amount;
+          }
+          retrait += payoffParMois.get(month) || 0;
+          if (pool < 0) { retrait += -pool; pool = 0; }
+        }
         // 1. Épargne du mois, versée en début de mois et répartie par LE
         //    moteur d'allocation (EX-57) — au mois 1, contexte identique à
         //    celui de l'assistant (critère d'acceptation 3).
-        if (savings > 0) {
+        if (pool > 0) {
           const ctx = baseCtx.map(c => ({ ...c, value: vals[c.id],
             supports: c.supports ? c.supports.map(s => ({ ...s,
               price: Math.max(1, Math.round(s.price * Math.pow(1 + (Projection.returnOf(accounts.find(a => a.id === c.id)) || 0), (m - 1) / 12))) })) : undefined }));
-          const alloc = Alloc.allocate(U.roundCents(savings), ctx);
+          const alloc = Alloc.allocate(U.roundCents(pool), ctx);
           if (m === 1) out.firstAlloc = alloc;
           for (const c of ctx) {
             vals[c.id] += alloc.perAccount[c.id].amount;
             fisc[c.id] += alloc.perAccount[c.id].amount;   // un versement n'est pas un gain
             if (alloc.perAccount[c.id].amount) contrib[c.id] = alloc.perAccount[c.id].amount;
           }
-          if (alloc.leftover > 0) {
-            const cash = accounts.find(a => a.type === 'courant') || accounts[0];
-            if (cash) {
-              vals[cash.id] += alloc.leftover;
-              fisc[cash.id] += alloc.leftover;
-              contrib[cash.id] = (contrib[cash.id] || 0) + alloc.leftover;
-            }
+          if (alloc.leftover > 0 && cashAcc) {
+            vals[cashAcc.id] += alloc.leftover;
+            fisc[cashAcc.id] += alloc.leftover;
+            contrib[cashAcc.id] = (contrib[cashAcc.id] || 0) + alloc.leftover;
           }
+        }
+        if (retrait > 0 && cashAcc) {
+          vals[cashAcc.id] -= retrait;
+          fisc[cashAcc.id] = Math.max(0, fisc[cashAcc.id] - retrait);
+          contrib[cashAcc.id] = (contrib[cashAcc.id] || 0) - retrait;
         }
         // 2. Capitalisation : les gains produisent des gains (EX-59, EX-61).
         //    Un versement entre avec un âge nul ; l'argent déjà investi
@@ -109,10 +199,11 @@ const Projection = {
       out.valsSeries.push({ ...vals });
       out.basisSeries.push({ ...fisc });
 
-      // 4. Dettes : capital restant dû à ce mois (EX-64).
+      // 4. Dettes : capital restant dû à ce mois (EX-64) — remboursements
+      //    anticipés du scénario avancé compris.
       let debts = 0;
-      const dEnd = U.monthEnd(month);
-      for (const c of S.credits) debts += Engine.creditRemaining(c, dEnd);
+      if (plans) for (const pl of plans) debts += pl.rem[m];
+      else { const dEnd = U.monthEnd(month); for (const c of S.credits) debts += Engine.creditRemaining(c, dEnd); }
       out.debts.push(debts);
 
       // 5. Quantiles : chaque compte volatil × exp(z·σ·√âge) — l'âge moyen

@@ -476,6 +476,10 @@ button.busy::after {
 .muted { color: var(--texte-faible); }
 .spacer { flex: 1; }
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar .ghost.actif {
+  color: var(--or-clair); border-color: rgba(243,201,107,0.45);
+  background: rgba(243,201,107,0.08);
+}
 .right { text-align: right; }
 .clickable { cursor: pointer; }
 .drag-handle { cursor: grab; color: var(--texte-faible); user-select: none; }

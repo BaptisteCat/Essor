@@ -96,6 +96,7 @@ const ScreenPatrimoine = {
           <button class="ghost" id="proj-ep-prev" title="Revenus prévus moins dépenses prévues">déduire du prévisionnel</button>
           <button class="ghost" id="proj-ep-reel" title="Moyenne des derniers mois complets">du réel constaté</button>
           <button class="ghost" id="proj-ep-budget" title="Somme de vos lignes d'épargne au budget">de mes versements</button>
+          <button class="ghost" id="proj-avance" title="Paliers d'épargne datés, charges à venir, événements ponctuels, remboursements anticipés de crédit">projections avancées…</button>
         </div>
         <div class="hint" id="proj-ep-source"></div>
         <div class="chart-holder" id="pat-proj"></div>
@@ -225,6 +226,7 @@ const ScreenPatrimoine = {
           <button class="ghost" id="proj-ep-prev" title="Revenus prévus moins dépenses prévues">déduire du prévisionnel</button>
           <button class="ghost" id="proj-ep-reel" title="Moyenne des derniers mois complets">du réel constaté</button>
           <button class="ghost" id="proj-ep-budget" title="Somme de vos lignes d'épargne au budget">de mes versements</button>
+          <button class="ghost" id="proj-avance" title="Paliers d'épargne datés, charges à venir, événements ponctuels, remboursements anticipés de crédit">projections avancées…</button>
         </div>
         <div class="hint" id="proj-ep-source"></div>
         <div class="chart-holder" id="pat-proj"></div>
@@ -295,7 +297,201 @@ const ScreenPatrimoine = {
       poser(r.montant, 'reel');
     };
     document.getElementById('proj-ep-budget').onclick = () => poser(Alloc.plannedMonthlySavings(), 'budget');
+    const btnAvance = document.getElementById('proj-avance');
+    btnAvance.classList.toggle('actif', !!Store.state.settings.projAdvanced?.enabled);
+    btnAvance.onclick = () => ScreenPatrimoine.avanceModal();
     majSource();
+  },
+
+  /* ---------- Projections avancées ----------
+     Un scénario DATÉ : « j'épargne 600 €, puis 1 500 € à partir de mars 2027,
+     300 € de charges s'ajoutent en 2028, je solde le crédit auto en 2029 ».
+     Tout est rejoué par le même moteur — centrale ET Monte Carlo — et
+     désactivé, la projection redevient exactement celle d'origine. */
+
+  // Le scénario actif se résume en toutes lettres au-dessus des chiffres :
+  // une courbe qui a changé doit dire pourquoi (P7).
+  avanceResume() {
+    const adv = Store.state.settings.projAdvanced;
+    if (!adv || !adv.enabled) return '';
+    const S = Store.state;
+    const bouts = [];
+    for (const s of (adv.savingsSteps || []).slice().sort((a, b) => a.month < b.month ? -1 : 1))
+      bouts.push(`épargne portée à <b class="num">${U.fmtEUR(s.amount)}</b> /mois dès ${U.fmtMonth(s.month)}`);
+    for (const c of (adv.charges || []))
+      bouts.push(`${c.label ? U.escapeHtml(c.label) + ' : ' : ''}<b class="num">${U.fmtEUR(c.amount)}</b> /mois
+        de charges en plus dès ${U.fmtMonth(c.from)}${c.to ? ` jusqu'à ${U.fmtMonth(c.to)}` : ''}`);
+    for (const e of (adv.events || []))
+      bouts.push(`${e.amount > 0 ? 'rentrée' : 'dépense'} de <b class="num">${U.fmtEUR(Math.abs(e.amount))}</b>
+        en ${U.fmtMonth(e.month)}${e.label ? ` (${U.escapeHtml(e.label)})` : ''}`);
+    for (const p of (adv.payoffs || [])) {
+      const c = S.credits.find(x => x.id === p.creditId);
+      bouts.push(`remboursement ${p.amount != null ? `de <b class="num">${U.fmtEUR(p.amount)}</b> sur` : 'du solde de'}
+        ${U.escapeHtml(c ? c.name : '?')} en ${U.fmtMonth(p.month)}`);
+    }
+    if (adv.freedPaymentToSavings && S.credits.length)
+      bouts.push(`la mensualité d'un crédit soldé rejoint l'épargne`);
+    return `<div class="notice gold" style="margin-top:8px"><b>Scénario avancé actif</b>${bouts.length
+      ? ' — ' + bouts.join(' · ') + '.' : ' — rien de configuré pour l\'instant, la projection est inchangée.'}
+      <span class="small">Les sorties d'argent (dépenses, remboursements, épargne devenue négative)
+      sont retirées du compte courant.</span></div>`;
+  },
+
+  avanceModal() {
+    const S = Store.state;
+    const def = { enabled: false, savingsSteps: [], charges: [], events: [], payoffs: [], freedPaymentToSavings: false };
+    const adv = { ...def, ...JSON.parse(JSON.stringify(S.settings.projAdvanced || {})) };
+    const minMois = U.addMonths(U.currentMonth(), 1);
+    const m = UI.modal(`<div id="proj-adv"></div>`);
+    const corps = m.el.querySelector('#proj-adv');
+
+    const mois = (liste, idx, k, val, requis) => `<input type="month" data-liste="${liste}" data-idx="${idx}"
+      data-k="${k}" value="${val || ''}" min="${minMois}" ${requis ? 'required' : ''}>`;
+    const montant = (liste, idx, k, cents, ph = '') => `<input class="amount" size="9" data-liste="${liste}"
+      data-idx="${idx}" data-k="${k}" placeholder="${ph}"
+      value="${cents != null ? (cents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, useGrouping: false }) : ''}">`;
+    const suppr = (liste, idx) => `<button class="ghost" data-suppr="${liste}" data-idx="${idx}" title="Retirer">✕</button>`;
+
+    const dessiner = () => {
+      const paliers = adv.savingsSteps.map((s, i) => `<tr>
+        <td>à partir de ${mois('savingsSteps', i, 'month', s.month, true)}</td>
+        <td class="num">épargne ${montant('savingsSteps', i, 'amount', s.amount)} € /mois</td>
+        <td>${suppr('savingsSteps', i)}</td></tr>`).join('');
+      const charges = adv.charges.map((c, i) => `<tr>
+        <td><input size="14" data-liste="charges" data-idx="${i}" data-k="label" value="${U.escapeHtml(c.label || '')}"
+          placeholder="loyer, pension…"></td>
+        <td>de ${mois('charges', i, 'from', c.from, true)} à ${mois('charges', i, 'to', c.to)}</td>
+        <td class="num">${montant('charges', i, 'amount', c.amount)} € /mois</td>
+        <td>${suppr('charges', i)}</td></tr>`).join('');
+      const events = adv.events.map((e, i) => `<tr>
+        <td>${mois('events', i, 'month', e.month, true)}</td>
+        <td><select data-liste="events" data-idx="${i}" data-k="sens">
+          <option value="1" ${e.amount >= 0 ? 'selected' : ''}>rentrée (investie)</option>
+          <option value="-1" ${e.amount < 0 ? 'selected' : ''}>dépense (retirée)</option></select></td>
+        <td class="num">${montant('events', i, 'amount', e.amount != null ? Math.abs(e.amount) : null)} €</td>
+        <td><input size="12" data-liste="events" data-idx="${i}" data-k="label" value="${U.escapeHtml(e.label || '')}"
+          placeholder="héritage, travaux…"></td>
+        <td>${suppr('events', i)}</td></tr>`).join('');
+      const credits = S.credits.map(c => `<option value="${c.id}">${U.escapeHtml(c.name)}</option>`).join('');
+      const payoffs = adv.payoffs.map((p, i) => {
+        const c = S.credits.find(x => x.id === p.creditId);
+        const restant = c && p.month ? Engine.creditRemaining(c, U.monthEnd(p.month)) : null;
+        return `<tr>
+        <td><select data-liste="payoffs" data-idx="${i}" data-k="creditId">${S.credits.map(x =>
+          `<option value="${x.id}" ${x.id === p.creditId ? 'selected' : ''}>${U.escapeHtml(x.name)}</option>`).join('')}</select></td>
+        <td>en ${mois('payoffs', i, 'month', p.month, true)}</td>
+        <td class="num">${montant('payoffs', i, 'amount', p.amount, 'solde total')} €
+          ${restant != null ? `<div class="small">restant dû à cette date : ${U.fmtEUR(restant)}</div>` : ''}</td>
+        <td>${suppr('payoffs', i)}</td></tr>`;
+      }).join('');
+
+      corps.innerHTML = `
+        <h2>Projections avancées</h2>
+        <div class="hint">Chaque ligne est datée au mois ; la projection — centrale et Monte Carlo —
+          la rejoue. Les sorties d'argent sont retirées du compte courant. Ceci est une simulation,
+          pas un conseil en investissement.</div>
+        <div class="field" style="margin-top:10px"><label><input type="checkbox" id="adv-on"
+          ${adv.enabled ? 'checked' : ''} style="width:auto"> Activer le scénario avancé dans la projection</label></div>
+
+        <h3 style="margin-top:14px">Épargne par paliers</h3>
+        <div class="hint">À chaque date, l'épargne mensuelle simulée <b>devient</b> ce montant —
+          « 600 € aujourd'hui, 1 500 € à partir de mars 2027, 2 000 € à partir de 2029 ».
+          Avant le premier palier, c'est l'épargne du champ « Épargne mensuelle simulée » qui court${
+          Store.state.settings.savingsFollowInflation ? ' ; l\'inflation continue de s\'appliquer après chaque palier' : ''}.</div>
+        ${paliers ? `<table>${paliers}</table>` : ''}
+        <button class="ghost" data-ajout="savingsSteps">+ ajouter un palier</button>
+
+        <h3 style="margin-top:14px">Charges supplémentaires</h3>
+        <div class="hint">Montant retranché de l'épargne chaque mois entre deux dates — un loyer qui
+          arrive, une pension, un enfant. Sans date de fin, la charge court jusqu'à l'horizon.
+          Montants d'aujourd'hui, non indexés sur l'inflation.</div>
+        ${charges ? `<table>${charges}</table>` : ''}
+        <button class="ghost" data-ajout="charges">+ ajouter une charge</button>
+
+        <h3 style="margin-top:14px">Événements ponctuels</h3>
+        <div class="hint">Une rentrée (héritage, prime, vente) est investie comme l'épargne du mois ;
+          une dépense (travaux, voiture, apport) est retirée du compte courant.</div>
+        ${events ? `<table>${events}</table>` : ''}
+        <button class="ghost" data-ajout="events">+ ajouter un événement</button>
+
+        <h3 style="margin-top:14px">Remboursements anticipés de crédit</h3>
+        ${S.credits.length ? `
+          <div class="hint">Le montant est prélevé du compte courant ce mois-là et vient réduire le
+            capital restant dû — montant vide : le crédit est soldé en totalité.</div>
+          ${payoffs ? `<table>${payoffs}</table>` : ''}
+          <button class="ghost" data-ajout="payoffs">+ ajouter un remboursement</button>
+          <div class="field" style="margin-top:10px"><label><input type="checkbox" id="adv-libere"
+            ${adv.freedPaymentToSavings ? 'checked' : ''} style="width:auto">
+            Quand un crédit est soldé — à l'échéance ou par anticipation — sa mensualité libérée
+            s'ajoute à l'épargne des mois suivants</label></div>`
+        : `<div class="empty">Aucun crédit déclaré — ils se créent dans Réglages.</div>`}
+
+        <div class="actions">
+          <button class="ghost" data-x="annuler">Annuler</button>
+          <button class="primary" data-x="appliquer">Appliquer</button>
+        </div>`;
+
+      corps.querySelectorAll('[data-ajout]').forEach(b => b.onclick = () => {
+        const NEUF = {
+          savingsSteps: () => ({ id: U.uid(), month: '', amount: null }),
+          charges: () => ({ id: U.uid(), from: '', to: '', amount: null, label: '' }),
+          events: () => ({ id: U.uid(), month: '', amount: null, label: '' }),
+          payoffs: () => ({ id: U.uid(), creditId: S.credits[0].id, month: '', amount: null }),
+        };
+        adv[b.dataset.ajout].push(NEUF[b.dataset.ajout]());
+        adv.enabled = true;   // qui configure veut voir l'effet : la case se coche d'elle-même
+        dessiner();
+      });
+      corps.querySelectorAll('[data-suppr]').forEach(b => b.onclick = () => {
+        adv[b.dataset.suppr].splice(Number(b.dataset.idx), 1);
+        dessiner();
+      });
+      corps.querySelector('[data-x="annuler"]').onclick = m.close;
+      corps.querySelector('[data-x="appliquer"]').onclick = appliquer;
+    };
+
+    // Chaque saisie retombe dans le brouillon : ajouter ou retirer une ligne
+    // redessine sans rien perdre.
+    corps.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t.id === 'adv-on') { adv.enabled = t.checked; return; }
+      if (t.id === 'adv-libere') { adv.freedPaymentToSavings = t.checked; return; }
+      if (!t.dataset.liste) return;
+      const item = adv[t.dataset.liste][Number(t.dataset.idx)];
+      if (!item) return;
+      const k = t.dataset.k;
+      if (k === 'sens') item.amount = Math.abs(item.amount || 0) * Number(t.value);
+      else if (t.classList.contains('amount')) {
+        let v = U.parseAmount(t.value);
+        if (t.dataset.liste === 'events' && v != null) {
+          const sens = corps.querySelector(`[data-liste="events"][data-idx="${t.dataset.idx}"][data-k="sens"]`);
+          v = Math.abs(v) * (sens && sens.value === '-1' ? -1 : 1);
+        }
+        item[k] = v;
+      } else item[k] = t.value;
+      // Un « restant dû à cette date » à mettre à jour : seul cas où l'on redessine.
+      if (t.dataset.liste === 'payoffs' && (k === 'month' || k === 'creditId')) dessiner();
+    });
+
+    const appliquer = () => {
+      // Une ligne sans date ne peut rien dater : elle est écartée, et on le dit.
+      const avant = adv.savingsSteps.length + adv.charges.length + adv.events.length + adv.payoffs.length;
+      adv.savingsSteps = adv.savingsSteps.filter(s => s.month && s.amount != null);
+      adv.charges = adv.charges.filter(c => c.from && c.amount > 0);
+      adv.events = adv.events.filter(e => e.month && e.amount);
+      adv.payoffs = adv.payoffs.filter(p => p.month && p.creditId);
+      const ecartees = avant - (adv.savingsSteps.length + adv.charges.length + adv.events.length + adv.payoffs.length);
+      adv.savingsSteps.sort((a, b) => a.month < b.month ? -1 : 1);
+      S.settings.projAdvanced = adv;
+      Store.markDirty();
+      m.close();
+      if (ecartees) UI.toast(`${ecartees} ligne${ecartees > 1 ? 's' : ''} sans date ou sans montant écartée${ecartees > 1 ? 's' : ''}.`);
+      document.getElementById('proj-avance')?.classList.toggle('actif', adv.enabled);
+      ScreenPatrimoine.renderProjection();
+      ScreenPatrimoine.renderGoals();
+    };
+
+    dessiner();
   },
 
   // Épargne mensuelle retenue par la projection, et d'où elle vient — le
@@ -615,7 +811,8 @@ const ScreenPatrimoine = {
     // montrée par des percentiles, jamais masquée derrière un chiffre unique).
     const mc = Projection.monteCarlo(h);
     document.getElementById('proj-label').textContent =
-      `— inflation ${U.fmtPct(Store.state.settings.inflation)} /an, épargne ${U.fmtEUR(Projection.monthlySavings())} /mois, ${mc.paths} trajectoires simulées`;
+      `— inflation ${U.fmtPct(Store.state.settings.inflation)} /an, épargne ${U.fmtEUR(Projection.monthlySavings())} /mois, ${mc.paths} trajectoires simulées` +
+      (Projection.advanced() ? ' · scénario avancé' : '');
     Charts.line(document.getElementById('pat-proj'), mc.months, [
       { name: 'Centrale', values: mc.central, color: Charts.COLORS.or, width: 2.5 },
       { name: 'Prudente (P25)', values: mc.p25, color: Charts.COLORS.cuivre, width: 1.6 },
@@ -634,6 +831,7 @@ const ScreenPatrimoine = {
     };
     const auj = Projection.netToday();
     document.getElementById('proj-summary').innerHTML = `
+      ${ScreenPatrimoine.avanceResume()}
       <table style="margin-top:8px">
         <tr><th>Dans ${Math.round(last / 12)} ans</th><th class="num">Brut (courants)</th>
             <th class="num">Net de fiscalité</th><th class="num">Net en € constants</th></tr>

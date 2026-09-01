@@ -43,6 +43,18 @@ const Store = {
         avAbattement: 460000,         // abattement AV après 8 ans : 4 600 € seul, 9 200 € couple
         projSavings: null,            // épargne mensuelle simulée ; null = celle du budget
         projSavingsSource: 'budget',  // d'où elle vient, pour pouvoir le dire (P7)
+        // Scénario avancé de projection : événements DATÉS — paliers
+        // d'épargne, charges à venir, rentrées et dépenses ponctuelles,
+        // remboursements anticipés de crédit. Désactivé, la projection
+        // reste strictement celle d'origine.
+        projAdvanced: {
+          enabled: false,
+          savingsSteps: [],  // {id, month, amount} — l'épargne mensuelle DEVIENT ce montant à partir de ce mois
+          charges: [],       // {id, from, to?, amount, label} — charge mensuelle en plus, retranchée de l'épargne
+          events: [],        // {id, month, amount, label} — ponctuel : >0 rentrée investie, <0 dépense retirée
+          payoffs: [],       // {id, creditId, month, amount?} — remboursement anticipé ; sans montant : solde total
+          freedPaymentToSavings: false, // mensualité d'un crédit terminé → épargne des mois suivants
+        },
         verrouillageMin: 20,          // verrouillage auto après N minutes d'inactivité ; 0 = jamais
         // Rendements annuels attendus par nature (EX-2, EX-60) — volontairement bas.
         returns: { courant: 0, livret: 0.017, titres: 0.045, pea: 0.045, av: 0.025, crypto: 0.0, immo: 0.01, autre: 0 },

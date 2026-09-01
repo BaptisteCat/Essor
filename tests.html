@@ -212,6 +212,85 @@ try {
   check('D4 — le taux de rente est paramétrable',
     rt.taux === 0.03 && rt.monthly === U.roundCents(1000000 * 0.03 / 12));
 }
+/* ---- Projections avancées : paliers, charges, ponctuels, crédits ---- */
+{
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.certifications.push({ id: 'c1', accountId: 'cc', date: U.today(), balance: 0 });
+  S.settings.inflation = 0;
+  S.settings.savingsFollowInflation = false;
+  S.settings.projSavings = 60000; // 600 €
+  S.budget.savings = [];
+  const base = Projection.run(12);
+  S.settings.projAdvanced.enabled = true;
+  const p0 = Projection.run(12);
+  check('Avancé — activé sans rien configurer, la projection est inchangée',
+    JSON.stringify(p0.central) === JSON.stringify(base.central));
+
+  // Palier daté : 600 €/mois pendant 6 mois, puis 1 500 €.
+  S.settings.projAdvanced.savingsSteps.push({ id: 'p1', month: U.addMonths(U.currentMonth(), 7), amount: 150000 });
+  const p1 = Projection.run(12);
+  check('Avancé — palier d\'épargne daté : 6 mois à 600 € puis 6 mois à 1 500 €',
+    p1.central[12] === 6 * 60000 + 6 * 150000, `obtenu ${p1.central[12]}`);
+  S.settings.projAdvanced.savingsSteps = [];
+
+  // Charge mensuelle : 600 − 200 = 400 €/mois réellement épargnés.
+  S.settings.projAdvanced.charges.push({ id: 'ch', from: U.addMonths(U.currentMonth(), 1), amount: 20000, label: 'loyer' });
+  const p2 = Projection.run(12);
+  check('Avancé — une charge mensuelle datée réduit l\'épargne : 12 × (600 − 200)',
+    p2.central[12] === 12 * 40000, `obtenu ${p2.central[12]}`);
+
+  // Charge supérieure à l'épargne : le manque sort du compte courant, visiblement.
+  S.settings.projAdvanced.charges[0].amount = 100000;
+  const p3 = Projection.run(12);
+  check('Avancé — épargne nette négative : le manque est retiré du compte courant',
+    p3.central[12] === -12 * 40000, `obtenu ${p3.central[12]}`);
+  S.settings.projAdvanced.charges = [];
+
+  // Ponctuels : une rentrée investie, une dépense retirée.
+  S.settings.projSavings = 0;
+  S.settings.projAdvanced.events.push({ id: 'e1', month: U.addMonths(U.currentMonth(), 3), amount: 1000000, label: 'héritage' });
+  S.settings.projAdvanced.events.push({ id: 'e2', month: U.addMonths(U.currentMonth(), 5), amount: -50000, label: 'travaux' });
+  const p4 = Projection.run(12);
+  check('Avancé — rentrée et dépense ponctuelles datées',
+    p4.central[12] === 1000000 - 50000, `obtenu ${p4.central[12]}`);
+}
+{
+  // Remboursement anticipé : à taux nul, solder le crédit PUIS réinjecter la
+  // mensualité libérée doit être neutre sur le patrimoine net — l'invariant
+  // qui prouve que rien n'est compté deux fois ni oublié.
+  const S = fresh();
+  S.accounts.push({ id: 'cc', name: 'CC', type: 'courant', order: 0 });
+  S.certifications.push({ id: 'c1', accountId: 'cc', date: U.today(), balance: 2000000 });
+  S.settings.inflation = 0;
+  S.settings.projSavings = 0;
+  S.budget.savings = [];
+  S.credits.push({ id: 'k', name: 'Auto', principal: 1200000, annualRate: 0,
+    monthlyPayment: 10000, startDate: U.today(), months: 120 });
+  const base = Projection.run(12);
+  S.settings.projAdvanced.enabled = true;
+  S.settings.projAdvanced.payoffs.push({ id: 'r', creditId: 'k', month: U.addMonths(U.currentMonth(), 6), amount: null });
+  S.settings.projAdvanced.freedPaymentToSavings = true;
+  const p = Projection.run(12);
+  check('Avancé — remboursement anticipé : la dette s\'éteint au mois dit',
+    p.debts[5] === 1200000 - 5 * 10000 && p.debts[6] === 0 && p.debts[12] === 0,
+    `dettes m5 ${p.debts[5]}, m6 ${p.debts[6]}`);
+  check('Avancé — à taux nul, solde anticipé + mensualité libérée réinvestie = patrimoine net inchangé',
+    p.central[12] === base.central[12], `obtenu ${p.central[12]}, attendu ${base.central[12]}`);
+  // Le Monte Carlo rejoue le même scénario : sur un patrimoine sans actif
+  // volatil, toutes les trajectoires — retraits compris — collent à la centrale.
+  const mc = Projection.monteCarlo(12, { paths: 20 });
+  check('Avancé — le Monte Carlo rejoue le scénario (retraits compris)',
+    mc.p50[12] === mc.central[12] && mc.p10[12] === mc.central[12]);
+  // Sans remboursement anticipé, l'échéancier avancé colle à Engine.creditRemaining.
+  S.settings.projAdvanced.payoffs = [];
+  S.settings.projAdvanced.freedPaymentToSavings = false;
+  S.credits[0].annualRate = 0.03;
+  const p2 = Projection.run(24);
+  const attendu = Engine.creditRemaining(S.credits[0], U.monthEnd(U.addMonths(U.currentMonth(), 24)));
+  check('Avancé — sans remboursement anticipé, l\'échéancier reproduit Engine.creditRemaining au centime',
+    p2.debts[24] === attendu, `obtenu ${p2.debts[24]}, attendu ${attendu}`);
+}
 /* ---- Planisphère : des régions vers des pays, sans rien inventer ---- */
 {
   const M = (o) => new Map(Object.entries(o));
