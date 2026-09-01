@@ -6,7 +6,7 @@
    laissé au réseau, et le cache ne contient que des fichiers publics. */
 'use strict';
 
-const CACHE = 'essor-v22';
+const CACHE = 'essor-v23';
 
 const COQUILLE = [
   './', 'index.html', 'manifest.webmanifest',

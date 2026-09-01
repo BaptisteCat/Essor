@@ -582,8 +582,8 @@ try {
     check("P1 — l'appareil a enregistré tout du long",
       (await Coffre.ouvrirAvecCle(Store._cle, local.get('coffre'))).goals.some(g => g.id === 'g6'));
 
-    // La MÊME fiche modifiée des deux côtés : celui qui écrit garde la sienne
-    // — c'est la modification en cours, donc la plus récente — et on le dit.
+    // La MÊME fiche modifiée des deux côtés, l'autre document sans
+    // estampilles (ancienne version) : seule la nôtre existe, elle gagne.
     fusions = [];
     Store._baseTexte = JSON.stringify(Store.documentSync());
     const docConteste = JSON.parse(JSON.stringify(Store.documentSync()));
@@ -593,7 +593,7 @@ try {
     await deposer(docConteste, 'conteste');
     Store.state.goals = Store.state.goals.map(g => g.id === 'g1' ? { ...g, name: 'renommé ici' } : g);
     await Store._doSave();
-    check('Fusion — sur une fiche modifiée des deux côtés, celui qui écrit garde la sienne',
+    check('Fusion — fiche disputée face à un document sans estampilles : la nôtre, seule datée, est gardée',
       Store.state.goals.find(g => g.id === 'g1').name === 'renommé ici' && questions === 0,
       Store.state.goals.find(g => g.id === 'g1').name);
     check('Fusion — la fiche disputée est signalée, pour pouvoir revenir en arrière',
@@ -618,6 +618,73 @@ try {
     await Store.annulerFusion(enveloppeAvantFusion);
     check("Fusion — « revenir à ma version seule » rend l'état d'avant la fusion",
       Store.state.goals.some(g => g.id === 'g9') && Store.state.goals.some(g => g.id === 'g10'),
+      Store.state.goals.map(g => g.id).join(','));
+
+    // LE retour en arrière qui motivait la refonte : une session restée
+    // ouverte avec des données d'hier écrit APRÈS l'autre appareil, alors que
+    // sa propre modification de la fiche est plus ANCIENNE. C'est
+    // l'estampille de la fiche qui départage — jamais l'ordre des envois.
+    fusions = [];
+    Store._baseTexte = JSON.stringify(Store.documentSync());
+    Store._reposerEmpreintes();
+    const docRecent = JSON.parse(JSON.stringify(Store.documentSync()));
+    docRecent.goals = docRecent.goals.map(g => g.id === 'g1' ? { ...g, name: 'corrigé sur le téléphone' } : g);
+    docRecent.maj = new Date(Date.now() + 60000).toISOString();
+    docRecent.majPar = { id: 'appareil-b', nom: 'iPhone' };
+    docRecent.touch = { 'goals:g1': new Date(Date.now() + 60000).toISOString() };  // sa modification est la plus récente
+    await deposer(docRecent, 'tel-plus-recent');
+    Store.state.goals = Store.state.goals.map(g => g.id === 'g1' ? { ...g, name: 'saisie locale plus ancienne' } : g);
+    await Store._doSave();   // notre envoi arrive après, mais notre estampille est plus vieille
+    check('Fusion — la fiche modifiée en DERNIER gagne, même quand l\'autre session pousse après coup',
+      Store.state.goals.find(g => g.id === 'g1').name === 'corrigé sur le téléphone' && questions === 0,
+      Store.state.goals.find(g => g.id === 'g1').name);
+
+    // Le miroir : notre modification toute fraîche survit à une retouche
+    // ancienne, même si le document adverse est envoyé après le nôtre.
+    Store._baseTexte = JSON.stringify(Store.documentSync());
+    Store._reposerEmpreintes();
+    const docVieux = JSON.parse(JSON.stringify(Store.documentSync()));
+    docVieux.goals = docVieux.goals.map(g => g.id === 'g1' ? { ...g, name: 'retouche ancienne du téléphone' } : g);
+    docVieux.maj = new Date(Date.now() + 60000).toISOString();   // il pousse après…
+    docVieux.majPar = { id: 'appareil-b', nom: 'iPhone' };
+    docVieux.touch = { 'goals:g1': new Date(Date.now() - 3600000).toISOString() };  // …mais sa retouche date d'une heure
+    await deposer(docVieux, 'tel-retouche-ancienne');
+    Store.state.goals = Store.state.goals.map(g => g.id === 'g1' ? { ...g, name: 'ma correction toute fraîche' } : g);
+    await Store._doSave();
+    check('Fusion — une modification fraîche n\'est jamais annulée par une retouche plus ancienne',
+      Store.state.goals.find(g => g.id === 'g1').name === 'ma correction toute fraîche' && questions === 0,
+      Store.state.goals.find(g => g.id === 'g1').name);
+
+    // Les réglages ne s'écrasent plus en bloc : l'inflation changée là-bas et
+    // l'horizon changé ici survivent tous les deux.
+    Store._baseTexte = JSON.stringify(Store.documentSync());
+    Store._reposerEmpreintes();
+    const docReg = JSON.parse(JSON.stringify(Store.documentSync()));
+    docReg.settings = { ...docReg.settings, inflation: 0.033 };
+    docReg.maj = new Date().toISOString();
+    docReg.majPar = { id: 'appareil-b', nom: 'iPhone' };
+    docReg.touch = { 'settings:inflation': new Date().toISOString() };
+    await deposer(docReg, 'reglage-tel');
+    Store.state.settings.horizonMonths = 240;
+    await Store._doSave();
+    check('Fusion — deux réglages différents modifiés chacun de son côté survivent tous les deux',
+      Store.state.settings.inflation === 0.033 && Store.state.settings.horizonMonths === 240 && questions === 0,
+      `inflation=${Store.state.settings.inflation}, horizon=${Store.state.settings.horizonMonths}`);
+
+    // Une suppression plus récente qu'une retouche tient : la fiche ne
+    // ressuscite plus (l'estampille date aussi les suppressions).
+    Store._baseTexte = JSON.stringify(Store.documentSync());
+    Store._reposerEmpreintes();
+    const docModif = JSON.parse(JSON.stringify(Store.documentSync()));
+    docModif.goals = docModif.goals.map(g => g.id === 'g6' ? { ...g, name: 'retouché là-bas il y a longtemps' } : g);
+    docModif.maj = new Date(Date.now() + 60000).toISOString();
+    docModif.majPar = { id: 'appareil-b', nom: 'iPhone' };
+    docModif.touch = { 'goals:g6': new Date(Date.now() - 3600000).toISOString() };
+    await deposer(docModif, 'modif-vs-suppression');
+    Store.state.goals = Store.state.goals.filter(g => g.id !== 'g6');   // supprimée ici, à l'instant
+    await Store._doSave();
+    check('Fusion — une suppression plus récente qu\'une retouche ne ressuscite plus la fiche',
+      !Store.state.goals.some(g => g.id === 'g6') && questions === 0,
       Store.state.goals.map(g => g.id).join(','));
     Store.onFusionAuto = null;
 

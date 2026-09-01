@@ -65,6 +65,7 @@ const Store = {
       sync: { owner: '', repo: '', branch: 'main', chemin: 'essor-data.json.enc' },
       maj: null,          // heure exacte de la dernière modification synchronisée
       majPar: null,       // et l'appareil qui l'a faite — pour pouvoir le dire
+      touch: {},          // fiche → heure de sa dernière modification ICI (départage les fusions)
       accounts: [],       // {id, name, type, order, plafond?, returnOverride?, closed}
       credits: [],        // {id, name, principal, annualRate, monthlyPayment, startDate, months}
       certifications: [], // {id, accountId, date, balance}  (balance en centimes)
@@ -199,6 +200,7 @@ const Store = {
     // sera arbitrée à la main, une fois.
     Store._sigEnvoyee = Store._sigBase = (await Store._get('sigEnvoyee')) || null;
     Store._baseTexte = (await Store._get('base')) || null;
+    Store._empreintes = null;
     await Store._brancherDepot();
     await Store._majIndices();
   },
@@ -227,6 +229,7 @@ const Store = {
     Store._cle = null;
     Store.state = null;
     Store.mode = 'boot';
+    Store._empreintes = null;   // la prochaine session repartira du dernier accord
     Depot.configure(null);
     // Verrouiller est un geste : il retire aussi la clé de session conservée
     // par « rester déverrouillé » — un verrou qui se rouvre seul n'en est pas un.
@@ -269,6 +272,7 @@ const Store = {
     Store._shaDistant = (await Store._get('sha')) || null;
     Store._sigEnvoyee = Store._sigBase = (await Store._get('sigEnvoyee')) || null;
     Store._baseTexte = (await Store._get('base')) || null;
+    Store._empreintes = null;
     await Store._brancherDepot();
     await Store._majIndices();
     return true;
@@ -389,7 +393,9 @@ const Store = {
 
   // Voyagent avec le document mais ne comptent pas dans son empreinte : elles
   // changent à chaque envoi, alors que l'empreinte doit dire « même contenu ».
-  META: ['maj', 'majPar'],
+  // Les estampilles `touch` en font partie : dater une fiche n'est pas la
+  // modifier, et les compter créerait des révisions sans contenu.
+  META: ['maj', 'majPar', 'touch'],
 
   // Le document tel qu'il part dans le dépôt, hors horodatage.
   documentSync(etat) {
@@ -455,6 +461,84 @@ const Store = {
     return 'cet appareil';
   },
 
+  /* ---------- Estampilles : QUAND chaque fiche a bougé ici ----------
+
+     Le modèle est celui des bases réparties (« last writer wins » par
+     enregistrement, à la Dynamo/Firestore) : à chaque enregistrement,
+     l'appareil compare ses fiches au dernier état connu et pose l'heure sur
+     celles qui ont changé — création, modification et suppression. Ces
+     estampilles voyagent avec le document ; en cas de fusion, c'est la fiche
+     la plus récemment MODIFIÉE qui gagne, jamais la session qui pousse en
+     dernier — c'était elle, la source des retours en arrière : une session
+     restée ouverte avec des données d'hier écrivait après coup et faisait
+     reculer le travail du matin. Les horloges des appareils doivent être à
+     peu près justes (elles le sont : NTP) ; l'enjeu d'une égalité à la
+     seconde près est nul. */
+
+  _empreintes: null,   // chemin → JSON de la fiche au dernier estampillage
+
+  // Les chemins estampillables d'un document : fiche par fiche pour les
+  // listes à identifiant, clé par clé pour les réglages, ligne par ligne pour
+  // le budget — c'est à ce grain que les fusions se départagent —, en bloc
+  // pour le reste (cours, dictionnaires).
+  _cheminsDoc(doc) {
+    const out = [];
+    for (const k of Object.keys(doc)) {
+      if (Store.LOCAL.includes(k) || Store.META.includes(k)) continue;
+      const v = doc[k];
+      if (Array.isArray(v) && Store._listeIdentifiee(v, null)) {
+        for (const x of v) out.push([`${k}:${Store._idFiche(x)}`, JSON.stringify(x)]);
+      } else if (k === 'settings' && v) {
+        for (const s of Object.keys(v)) out.push([`settings:${s}`, JSON.stringify(v[s])]);
+      } else if (k === 'budget' && v) {
+        for (const sub of ['categories', 'incomes', 'savings'])
+          for (const x of (v[sub] || [])) out.push([`budget.${sub}:${x.id}`, JSON.stringify(x)]);
+      } else {
+        out.push([k, JSON.stringify(v)]);
+      }
+    }
+    return out;
+  },
+
+  // Pose l'heure sur ce qui a changé depuis le dernier passage. Au premier
+  // passage de la session, le repère est le dernier accord avec le dépôt :
+  // tout ce qui s'en écarte est une modification voulue ici — y compris
+  // celles d'une session hors ligne passée, qui doivent garder leur poids.
+  _estampiller() {
+    const chemins = new Map(Store._cheminsDoc(Store.documentSync()));
+    if (!Store._empreintes) {
+      const base = Store.baseDoc();
+      Store._empreintes = base ? new Map(Store._cheminsDoc(base)) : chemins;
+    }
+    if (Store._empreintes === chemins) return;
+    const t = Store.state.touch || (Store.state.touch = {});
+    const now = new Date().toISOString();
+    for (const [ch, json] of chemins) if (Store._empreintes.get(ch) !== json) t[ch] = now;
+    for (const ch of Store._empreintes.keys()) if (!chemins.has(ch)) t[ch] = now;   // suppression : datée aussi
+    Store._empreintes = chemins;
+    // Une estampille ne sert que le temps que les appareils se revoient :
+    // au-delà de 90 jours, elle ne départage plus rien d'actuel — élaguée.
+    const seuil = new Date(Date.now() - 90 * 86400000).toISOString();
+    for (const ch of Object.keys(t)) if (t[ch] < seuil) delete t[ch];
+  },
+
+  // Après avoir INSTALLÉ un état venu d'ailleurs (adoption, fusion), le
+  // repère repart de lui : ses fiches ne sont pas des modifications de cet
+  // appareil, les estampiller comme telles fausserait les fusions suivantes.
+  _reposerEmpreintes() {
+    Store._empreintes = new Map(Store._cheminsDoc(Store.documentSync()));
+  },
+
+  // Qui garde une fiche disputée : l'estampille la plus récente. À défaut
+  // d'estampille des deux côtés (documents d'anciennes versions), `defaut`.
+  _gagnant(tl, td, chemin, defaut) {
+    const a = tl[chemin], b = td[chemin];
+    if (a && b && a !== b) return a > b ? 'local' : 'distant';
+    if (a && !b) return 'local';
+    if (!a && b) return 'distant';
+    return defaut;
+  },
+
   /* ---------- Enregistrement ---------- */
 
   markDirty() {
@@ -474,6 +558,9 @@ const Store = {
   async _doSave() {
     Store.saveStatus = 'saving';
     Store._notify();
+    // Estampiller AVANT d'écrire : les heures de modification font partie de
+    // ce qui doit survivre à un rechargement et partir avec le document.
+    if (Depot.actif()) Store._estampiller();
     // L'appareil d'abord, TOUJOURS — y compris pendant un conflit. Le conflit
     // ne porte que sur le dépôt ; refuser d'écrire en local laisserait le
     // travail en cours dans la seule mémoire vive, qu'un rechargement efface.
@@ -521,6 +608,7 @@ const Store = {
       const doc = Store.documentSync();
       doc.maj = new Date().toISOString();          // l'heure exacte de CETTE modification
       doc.majPar = { id: appareil.id, nom: appareil.nom };
+      doc.touch = Store.state.touch || {};         // les estampilles voyagent avec le document
       const env = await Coffre.sceller(Store._cle, Store._sel, doc);
       const sha = forcer ? await Depot.shaCourant() : Store._shaDistant;
       const r = await Depot.ecrire(env, sha,
@@ -603,16 +691,20 @@ const Store = {
     //    la mienne » jetait le travail de l'autre appareil.
     //    On réunit donc les deux, fiche par fiche, en s'appuyant sur le
     //    document du dernier accord : ce qui n'a changé que d'un côté vient de
-    //    ce côté-là ; ce qui a changé des deux revient au plus récent.
+    //    ce côté-là ; ce qui a changé des deux revient à la modification la
+    //    plus récente (estampilles), jamais à « celui qui pousse ».
     const base = Store.baseDoc();
-    // Notre document, horodatage compris, et la préférence qui va avec : ce
-    // que l'on vient de modifier prime sur ce que le dépôt portait déjà.
+    await Store._sauvegardeLocale('avant-fusion-automatique');
+    const avant = Store._derniereEnveloppe;
+    // Capture, fusion et installation d'un seul tenant — AUCUNE attente entre
+    // les trois : une saisie faite pendant une attente arriverait après la
+    // photo et serait effacée par l'installation.
+    Store._estampiller();
     const docLocal = Store.documentSync();
     docLocal.maj = Store.state.maj;
     docLocal.majPar = Store.state.majPar;
+    docLocal.touch = Store.state.touch || {};
     const fusion = Store.fusion3(base, docLocal, docDistant, { prefere: 'local' });
-    await Store._sauvegardeLocale('avant-fusion-automatique');
-    const avant = Store._derniereEnveloppe;
     const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
     Store.state = Store.migrate(fusion.doc);
     Store.state.ui = local.ui;
@@ -620,6 +712,7 @@ const Store = {
     Store.state.snapshotsDirty = true;
     Store.state.maj = docDistant.maj;
     Store.state.majPar = docDistant.majPar;
+    Store._reposerEmpreintes();
     Store.conflit = false;
     Store.conflitInfo = null;
     Store._shaDistant = distant.sha;
@@ -643,6 +736,7 @@ const Store = {
     Store.state.ui = local.ui;
     Store.state.snapshots = local.snapshots || {};
     Store.state.snapshotsDirty = true;
+    Store._empreintes = null;   // revenir en arrière est un geste voulu : il sera estampillé
     await Store._ecrireLocal();
     await Store._pousser({ forcer: true, message: 'Essor — fusion annulée', reessai: true });
   },
@@ -650,16 +744,20 @@ const Store = {
   /* ---------- Fusion à trois points ---------- */
 
   // base = document du dernier accord, local = le nôtre, distant = celui du
-  // dépôt. → {doc, contestes:[clés réellement modifiées des deux côtés]}
-  // Sans base, on se rabat sur une réunion simple, le plus récent l'emportant.
-  // `prefere` tranche les fiches modifiées des deux côtés. Lors d'un envoi,
-  // c'est 'local' : la modification qu'on est en train de faire est, par
-  // construction, la plus récente — et c'est celle que l'utilisateur veut
-  // garder. À défaut de préférence, l'horodatage des documents décide.
+  // dépôt. → {doc, contestes:[fiches réellement modifiées des deux côtés]}
+  // Sans base, on se rabat sur une réunion simple.
+  // Une fiche modifiée des deux côtés revient à la modification la plus
+  // RÉCENTE — les estampilles `touch`, posées fiche par fiche à chaque
+  // enregistrement, départagent. Jamais à « celui qui pousse » : c'était lui
+  // qui annulait des modifications volontaires, quand une session restée
+  // ouverte avec des données d'hier écrivait après coup. `prefere` n'est
+  // plus qu'un dernier recours, quand aucune estampille ne tranche
+  // (documents d'anciennes versions).
   fusion3(base, local, distant, { prefere } = {}) {
     const contestes = [];
     const doc = {};
-    const plusRecent = prefere || ((distant.maj || '') > (local.maj || '') ? 'distant' : 'local');
+    const defaut = prefere || ((distant.maj || '') > (local.maj || '') ? 'distant' : 'local');
+    const tl = local.touch || {}, td = distant.touch || {};
     const cles = new Set([...Object.keys(local), ...Object.keys(distant)]);
     for (const k of cles) {
       if (Store.META.includes(k) || Store.LOCAL.includes(k)) continue;
@@ -671,16 +769,28 @@ const Store = {
         if (sb === sl) { doc[k] = d; continue; }   // seul le dépôt a bougé
         if (sb === sd) { doc[k] = l; continue; }   // seul nous
       }
-      // Les deux ont bougé : on descend d'un cran.
+      // Les deux ont bougé : on descend au grain de la fiche.
       if (Array.isArray(l) && Array.isArray(d) && Store._listeIdentifiee(l, d)) {
-        const r = Store._fusionListe(base ? base[k] : null, l, d, plusRecent === 'distant');
+        const r = Store._fusionListe(base ? base[k] : null, l, d, k, tl, td, defaut);
         doc[k] = r.liste;
-        for (const id of r.contestes) contestes.push(`${k}:${id}`);
+        contestes.push(...r.contestes);
+      } else if (k === 'settings' && l && d) {
+        // Deux réglages différents touchés chacun de son côté ne se disputent
+        // rien : chaque clé se fusionne pour elle-même — l'inflation changée
+        // là-bas survit à l'horizon changé ici.
+        const r = Store._fusionObjet(base ? base.settings : null, l, d, 'settings', tl, td, defaut);
+        doc[k] = r.objet;
+        contestes.push(...r.contestes);
+      } else if (k === 'budget' && l && d) {
+        const r = Store._fusionBudget(base ? base.budget : null, l, d, tl, td, defaut);
+        doc[k] = r.budget;
+        contestes.push(...r.contestes);
       } else if (l && d && typeof l === 'object' && typeof d === 'object' && !Array.isArray(l) && !Array.isArray(d)) {
         // Dictionnaires (cours, métadonnées, mémoire d'import) : réunion clé à clé.
-        doc[k] = plusRecent === 'distant' ? Object.assign({}, l, d) : Object.assign({}, d, l);
+        doc[k] = Store._gagnant(tl, td, k, defaut) === 'distant'
+          ? Object.assign({}, l, d) : Object.assign({}, d, l);
       } else {
-        doc[k] = plusRecent === 'distant' ? d : l;
+        doc[k] = Store._gagnant(tl, td, k, defaut) === 'distant' ? d : l;
         contestes.push(k);
       }
     }
@@ -690,29 +800,45 @@ const Store = {
     if (Array.isArray(doc.transactions)) {
       doc.transactions = Store._plafonnerDoublons(doc.transactions, local.transactions || [], distant.transactions || []);
     }
+    // Les estampilles des deux appareils repartent ensemble, la plus récente
+    // gardée fiche par fiche : la même règle s'appliquera au prochain croisement.
+    const touch = { ...td };
+    for (const ch of Object.keys(tl)) if (!touch[ch] || tl[ch] > touch[ch]) touch[ch] = tl[ch];
+    doc.touch = touch;
     return { doc, contestes };
   },
 
   _listeIdentifiee(a, b) {
     const x = (a && a[0]) || (b && b[0]);
-    return !!x && typeof x === 'object' && x.id !== undefined;
+    return !!x && typeof x === 'object' && (x.id !== undefined || x.accountId !== undefined);
   },
 
-  _fusionListe(base, local, distant, distantGagne) {
-    const parId = (a) => { const m = new Map(); for (const x of (a || [])) m.set(x.id, x); return m; };
+  // Identité d'une fiche : son id, à défaut son compte (les cibles
+  // d'allocation n'ont pas d'autre identifiant).
+  _idFiche(x) { return x.id !== undefined ? x.id : x.accountId; },
+
+  _fusionListe(base, local, distant, chemin, tl, td, defaut) {
+    const parId = (a) => { const m = new Map(); for (const x of (a || [])) m.set(Store._idFiche(x), x); return m; };
     const mb = parId(base), ml = parId(local), md = parId(distant);
     const contestes = [], liste = [];
     for (const id of new Set([...ml.keys(), ...md.keys()])) {
+      const ch = `${chemin}:${id}`;
       const b = mb.get(id), l = ml.get(id), d = md.get(id);
       const sb = b === undefined ? null : JSON.stringify(b);
       if (l && !d) {
-        // Absent du dépôt : supprimé là-bas si nous ne l'avons pas touché,
-        // sinon c'est notre modification qui l'emporte sur une suppression.
-        if (base && sb !== null && sb === JSON.stringify(l)) continue;
+        if (base && sb !== null) {
+          if (sb === JSON.stringify(l)) continue;   // supprimée là-bas, intacte ici
+          // Modifiée ici ET supprimée là-bas : le geste le plus récent tient.
+          // Sans estampilles, la modification — une suppression s'annule mieux.
+          if (Store._gagnant(tl, td, ch, 'local') === 'distant') continue;
+        }
         liste.push(l); continue;
       }
       if (!l && d) {
-        if (base && sb !== null && sb === JSON.stringify(d)) continue;   // supprimé ici
+        if (base && sb !== null) {
+          if (sb === JSON.stringify(d)) continue;    // supprimée ici, intacte là-bas
+          if (Store._gagnant(tl, td, ch, 'distant') === 'local') continue;   // notre suppression est plus récente
+        }
         liste.push(d); continue;
       }
       const sl = JSON.stringify(l), sd = JSON.stringify(d);
@@ -721,10 +847,44 @@ const Store = {
         if (sb === sl) { liste.push(d); continue; }
         if (sb === sd) { liste.push(l); continue; }
       }
-      liste.push(distantGagne ? d : l);
-      contestes.push(id);
+      liste.push(Store._gagnant(tl, td, ch, defaut) === 'distant' ? d : l);
+      contestes.push(ch);
     }
     return { liste, contestes };
+  },
+
+  // Fusion clé à clé d'un objet plat (les réglages) : deux clés différentes
+  // modifiées chacune de son côté ne s'écrasent plus l'une l'autre en bloc.
+  _fusionObjet(base, local, distant, chemin, tl, td, defaut) {
+    const objet = {}, contestes = [];
+    for (const k of new Set([...Object.keys(local || {}), ...Object.keys(distant || {})])) {
+      const l = local ? local[k] : undefined, d = distant ? distant[k] : undefined;
+      const garder = (v) => { if (v !== undefined) objet[k] = v; };
+      const sl = JSON.stringify(l), sd = JSON.stringify(d);
+      if (sl === sd) { garder(l); continue; }
+      if (base) {
+        const sb = JSON.stringify(base[k]);
+        if (sb === sl) { garder(d); continue; }   // seul le dépôt a touché cette clé
+        if (sb === sd) { garder(l); continue; }   // seuls nous
+      }
+      garder(Store._gagnant(tl, td, `${chemin}:${k}`, defaut) === 'distant' ? d : l);
+      contestes.push(`${chemin}:${k}`);
+    }
+    return { objet, contestes };
+  },
+
+  // Le budget est un objet, mais ses lignes ont des identifiants : chacune de
+  // ses listes se fusionne fiche par fiche, comme les autres.
+  _fusionBudget(base, local, distant, tl, td, defaut) {
+    const budget = {}, contestes = [];
+    for (const sub of ['categories', 'incomes', 'savings']) {
+      const l = (local && local[sub]) || [], d = (distant && distant[sub]) || [];
+      if (JSON.stringify(l) === JSON.stringify(d)) { budget[sub] = l; continue; }
+      const r = Store._fusionListe(base ? base[sub] : null, l, d, `budget.${sub}`, tl, td, defaut);
+      budget[sub] = r.liste;
+      contestes.push(...r.contestes);
+    }
+    return { budget, contestes };
   },
 
   // Pour une même empreinte, le nombre d'occurrences retenu est le plus grand
@@ -768,6 +928,7 @@ const Store = {
     Store.state.ui = local.ui;
     Store.state.snapshots = local.snapshots || {};
     Store.state.snapshotsDirty = true;
+    Store._reposerEmpreintes();   // ces fiches viennent d'ailleurs : rien à estampiller
     await Store._ecrireLocal();
     await Store._noterAccord(distant.sha, Store.signature());
     Store.conflit = false;
@@ -814,9 +975,13 @@ const Store = {
     }
     const docDistant = await Coffre.ouvrirAvecCle(Store._cle, distant.texte);
     const sigDistant = Store.signature(docDistant);
-    if (sigDistant === Store.signature()) { await Store._accorder(distant, docDistant); return 'a-jour'; }
+    // Recalculée APRÈS le déchiffrement : une saisie a pu arriver pendant
+    // cette attente, et l'adoption en bloc l'effacerait.
+    const sigLocal = Store.signature();
+    const aEcrireEncore = sigLocal !== Store._sigEnvoyee || Store._enAttente;
+    if (sigDistant === sigLocal) { await Store._accorder(distant, docDistant); return 'a-jour'; }
     // Rien de local en attente : on suit le dépôt, sans rien demander.
-    if (!aEcrire || sigDistant === Store._sigBase || Store.signature() === Store._sigBase) {
+    if (!aEcrireEncore || sigDistant === Store._sigBase || sigLocal === Store._sigBase) {
       if (sigDistant === Store._sigBase) { await Store.save(); return 'a-jour'; }
       await Store._adopter(distant, docDistant);
       return 'repris';
@@ -857,14 +1022,18 @@ const Store = {
     if (!Store.conflitInfo) throw new Error('Aucune divergence à fusionner.');
     const distant = Store.conflitInfo.distant;
     await Store._sauvegardeLocale('avant-fusion');
+    // Capture, fusion, installation : d'un seul tenant, sans attente entre eux.
+    Store._estampiller();
     const docLocal = Store.documentSync();
     docLocal.maj = Store.state.maj;
+    docLocal.touch = Store.state.touch || {};
     const fusion = Store.fusion3(Store.baseDoc(), docLocal, distant.doc, { prefere: 'local' });
     const local = { ui: Store.state.ui, snapshots: Store.state.snapshots };
     Store.state = Store.migrate(fusion.doc);
     Store.state.ui = local.ui;
     Store.state.snapshots = local.snapshots || {};
     Store.state.snapshotsDirty = true;
+    Store._reposerEmpreintes();
     Store._shaDistant = distant.sha;
     Store.conflit = false;
     Store.conflitInfo = null;
@@ -968,6 +1137,7 @@ const Store = {
     await Store._sauvegardeLocale('avant-restauration');
     Store.state = Store.migrate(await Coffre.ouvrirAvecCle(Store._cle, b.texte));
     Store.state.snapshotsDirty = true;
+    Store._empreintes = null;   // restaurer est un geste voulu : ses écarts seront estampillés
     Store.markDirty();
   },
 
@@ -1015,6 +1185,7 @@ const Store = {
     await Store._sauvegardeLocale('avant-import');
     Store.state = Store.migrate(donnees);
     Store.state.snapshotsDirty = true;
+    Store._empreintes = null;   // importer est un geste voulu : ses écarts seront estampillés
     Store.markDirty();
   },
 
@@ -1031,6 +1202,7 @@ const Store = {
     for (const k of ['coffre', 'jeton', 'sha', 'sigEnvoyee', 'base', 'backups', 'indices', 'bio', 'cleSession']) await Store._del(k);
     Store._jeton = null; Store._derniereEnveloppe = null;
     Store._enAttente = false; Store.conflit = false;
+    Store._empreintes = null;
   },
 
   _notify() { if (Store.onStatus) Store.onStatus(Store.saveStatus, Store.mode); },
